@@ -1,0 +1,10 @@
+1000.csv
+.env
+topAPI.csv
+API.csv
+smsresults.csv
+neru.yml
+node_modules/
+/node_modules
+package-lock.json
+.DS_Store

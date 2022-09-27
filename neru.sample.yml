@@ -1,0 +1,20 @@
+project:
+  name: test
+instance:
+  name: dev
+  runtime: nodejs16
+  region: aws.euw1
+  application-id: 5sdsdss-sdsdd-sds
+  capabilities:
+    - voice
+  entrypoint:
+    - node
+    - index.js
+  secrets:
+    - apikey
+    - apiSecret
+debug:
+  name: debug
+  entrypoint:
+    - nodemon
+    - index.js

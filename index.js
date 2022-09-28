@@ -16,9 +16,9 @@ const rateLimitAxios = rateLimiterService.newInstance(tps);
 const createCsvWriter = require('csv-writer').createObjectCsvWriter;
 const utils = require('./utils');
 const dotenv = require('dotenv');
+const uuid = require('uuidv4');
 dotenv.config();
 app.use(cors());
-app.use(express.static('public'));
 
 const fs = require('fs');
 
@@ -31,10 +31,126 @@ const csvWriter = createCsvWriter({
   ],
 });
 
+app.use(bodyParser.urlencoded({ extended: false }));
 app.use(bodyParser.json());
+// set view engine to ejs
+app.set('view engine', 'ejs');
 
 app.get('/_/health', async (req, res) => {
   res.sendStatus(200);
+});
+
+const TEMPLATES_TABLENAME = 'TEMPLATES';
+// neru tablename for processed filenames
+const PROCESSEDFILES_TABLENAME = 'processedfiles';
+// column name of csv file that contains the template ID
+const CSV_TEMPLATE_ID_COLUMN_NAME = 'ID_SMSTEXT';
+// column name of csv file that contains the phone number of the receiver
+const CSV_PHONE_NUMBER_COLUMN_NAME = 'MOBILTELEFONNUMMER';
+// column name of csv file that contains the ID that will be put into account_ref (together with csv filename)
+const CSV_ID_COLUMN_NAME = 'ID';
+// column name of csv file that contains the ID that will be put in the client_ref field
+const CSV_CLIENT_REF_COLUMN_NAME = 'VERPFLICHTUNGSNUMMER';
+// cron job definition, default is every minute '* * * * *'
+// for EOS, we could use '0 9-18 * * 1-5' to run: At minute 0 past every hour from 9 through 18 on every day-of-week from Monday through Friday.
+// this makes sure that no one gets sendouts at weekends or in the middle of the night adn check for new files hourly within the given times and days
+const CRONJOB_DEFINITION = '* * * * *';
+// cancel all monitoring schedulers when server crashes or not
+const ON_CRASH_CANCEL_MONITOR = false;
+
+// allow to parse json bodies and form data if needed
+
+// TODO: add simple authentication middleware like username/pw with express-session or passport.js for everything
+
+// TEMPLATE VIEWS START
+// Get a list of templates as ejs view
+app.get('/templates', async (req, res) => {
+  const globalState = neru.getGlobalState();
+  const templates = await globalState.hgetall(TEMPLATES_TABLENAME);
+  const parsedTemplates = Object.keys(templates).map((key) => {
+    const data = JSON.parse(templates[key]);
+    return { ...data };
+  });
+  console.log(JSON.stringify(parsedTemplates));
+  res.render('templates/index', { templates: parsedTemplates });
+});
+
+// Get a form to create a new template
+app.get('/templates/new', async (req, res) => {
+  res.render('templates/new', {});
+});
+// TEMPLATE VIEWS END
+
+// TEMPLATE API START
+// Get a list of all templates
+app.get('/api/templates', async (req, res) => {
+  const globalState = neru.getGlobalState();
+  const templates = await globalState.hgetall(TEMPLATES_TABLENAME);
+  const parsedTemplates = Object.keys(templates).map((key) => {
+    const data = JSON.parse(templates[key]);
+    return { ...data };
+  });
+  res.json(parsedTemplates);
+});
+
+// Get a single temaplte by id
+app.get('/api/templates/:id', async (req, res) => {
+  const { id } = req.params;
+  if (!id) {
+    return res
+      .status(404)
+      .json({ success: false, error: 'please provide a valid id' });
+  }
+  const globalState = neru.getGlobalState();
+  const template = await globalState.hget(TEMPLATES_TABLENAME, id);
+  const parsedTemplate = await JSON.parse(template);
+  res.json(parsedTemplate);
+});
+
+// Create a new template
+app.post('/api/templates', async (req, res) => {
+  const globalState = neru.getGlobalState();
+  const { id, text, senderIdField } = req.body;
+  let newTemplate;
+  const updatedAt = new Date().toISOString();
+  if (id && text && senderIdField) {
+    newTemplate = { id, text, senderIdField };
+    const created = await globalState.hset(TEMPLATES_TABLENAME, {
+      [id]: JSON.stringify({ id, text, senderIdField, updatedAt }),
+    });
+    res.json({ created, newTemplate });
+  } else if (!id && text && senderIdField) {
+    let id = uuid();
+    newTemplate = { id, text, senderIdField };
+    const created = await globalState.hset(TEMPLATES_TABLENAME, {
+      [id]: JSON.stringify({
+        id,
+        text,
+        senderIdField,
+        updatedAt,
+      }),
+    });
+    res.json({ created, newTemplate });
+  } else {
+    res.status(500).json({
+      success: false,
+      error:
+        'please provide at least a valid text and senderIdField and also an id in case of updating existing templates.',
+    });
+  }
+});
+
+// Delete a template by ID
+app.delete('/api/templates/:id', async (req, res) => {
+  const { id } = req.params;
+  if (!id) {
+    return res
+      .status(404)
+      .json({ success: false, error: 'please provide a valid id' });
+  }
+  const globalState = neru.getGlobalState();
+  const deleted = await globalState.hdel(TEMPLATES_TABLENAME, id);
+  res.json({ success: true, deleted });
 });
 
 app.get('/dfiles', async (req, res) => {
@@ -181,6 +297,7 @@ const sendSms = async (records) => {
           rej(e);
         }
       } else {
+        ``;
         console.log('no valid senderId');
       }
     }

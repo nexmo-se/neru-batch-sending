@@ -157,7 +157,7 @@ app.get('/dfiles', async (req, res) => {
   try {
     const session = neru.createSession();
     const assets = new Assets(session);
-    const assetlist = await assets.binary('csv/test.csv').execute();
+    const assetlist = await assets.binary('send/test.csv').execute();
     console.log(assetlist);
 
     res.send(assetlist);
@@ -172,24 +172,44 @@ app.post('/checkandsend', async (req, res) => {
   const FILETYPES = 'send/';
   const PROCESSEDFILES = 'processedfiles';
   try {
-    // const globalState = neru.getGlobalState();
+    // set global state for database access
+    const globalState = neru.getGlobalState();
+    // create a neru session
     const session = neru.createSession();
+    // init assets access
     const assets = new Assets(session);
-    // const messages = new Messages(session);
 
-    // const lastCheck = await globalState.get('lastCsvCheck');
+    const lastCheck = await globalState.get('lastCsvCheck');
 
     // get file list from assets api
     const assetlist = await assets.list(FILETYPES, false, 10).execute();
     console.log(assetlist);
 
     const newCheck = new Date().toISOString();
-    // const savedNewCheck = await globalState.set('lastCsvCheck', newCheck);
+    const savedNewCheck = await globalState.set('lastCsvCheck', newCheck);
 
     let toBeProcessed = [];
+
+    if (!assetlist || !assetlist.res || assetlist.res.length <= 0) {
+      console.warn('Found no new csv files in asset list.');
+      return res.json({
+        success: false,
+        error: 'No new files found but no error.',
+      });
+    }
     assetlist.res.forEach((file) => {
-      if (file && file.name.endsWith('.csv')) {
+      if (
+        file &&
+        file.name &&
+        file.name.endsWith('.csv')
+
+        //TO DO: check why this is not true
+        // && (!lastCheck || new Date(file.lastModified) > new Date(lastCheck))
+      ) {
         toBeProcessed.push('/' + file.name);
+      } else {
+        console.log('I will not send since the file is already processed');
+        console.log(new Date(file.lastModified), new Date(lastCheck));
       }
       //toBeProcessed.push("/" + file.name);
     });
@@ -201,6 +221,8 @@ app.post('/checkandsend', async (req, res) => {
 
     toBeProcessed.forEach(async (filename) => {
       // process and send the file
+      console.log('processing file');
+
       asset = await assets.get(filename).execute();
 
       const fileBuffer = Buffer.from(asset.res.content, 'base64');
@@ -216,6 +238,8 @@ app.post('/checkandsend', async (req, res) => {
         const sendingResults = await sendSms(records);
 
         // await writeResults(sendingResults);
+      } else {
+        console.log('there is not time');
       }
       // await assets.copy('smsresults.csv', 'csv/');
 
@@ -240,10 +264,12 @@ app.get('/test', async (req, res) => {
       const secondsTillEndOfDay = utils.secondsTillEndOfDay(new Date());
 
       if (secondsTillEndOfDay > parseInt((results.length - 1) / 30)) {
+        // modifyRecords(results);
         const sendingResults = await sendSms(results);
-        await writeResults(sendingResults);
+        // await writeResults(sendingResults);
 
-        res.json(sendingResults);
+        // res.json(sendingResults);
+        res.sendStatus(200);
       }
       // res.sendStatus(200);
     });
@@ -264,21 +290,74 @@ const writeResults = async (results) => {
   // }
 };
 
+app.get('/state', async (req, res) => {
+  const globalState = neru.getGlobalState();
+  const templates = await globalState.hgetall(TEMPLATES_TABLENAME);
+  res.send(templates);
+});
+
 const sendSms = async (records) => {
   let smsSendingResults = [];
+  const globalState = neru.getGlobalState();
 
   return new Promise(async (res, rej) => {
     for (let i = 0; i < records.length; i++) {
-      if (utils.checkSenderIdValid(records[i]['VERPFLICHTUNGSNUMMER'])) {
+      // const template = {
+      //   id: 'bhg',
+      //   text: 'Hello you',
+      //   senderIdField: 'EOSTEAMRUECKRUFNUMMER',
+      //   updatedAt: '2022-09-28T12:18:49.035Z',
+      // };
+
+      //ID;EOSTEAMRUECKRUFNUMMER;ID_SMSTEXT;ANREDE;NACHNAME;VERPFLICHTUNGSNUMMER;MOBILTELEFONNUMMER;EMAILADRESSE;FELD01;FELD02;FELD03;FELD04;FELD05;FELD06;FELD07;FELD08;FELD09;FELD10
+
+      //this is for prod
+      const templateJson = await globalState.hget(
+        TEMPLATES_TABLENAME,
+        records[i][CSV_TEMPLATE_ID_COLUMN_NAME]
+      );
+      console.log(templateJson);
+
+      const template = await JSON.parse(templateJson);
+      console.log(template);
+
+      //prod end here
+
+      // get the template text into a variable
+      let text = template.text;
+
+      const senderNumber = `${records[i][
+        `${template.senderIdField}`
+      ].replaceAll('+', '')}`;
+
+      const to = `${records[i][CSV_PHONE_NUMBER_COLUMN_NAME].replaceAll(
+        '+',
+        ''
+      )}`;
+
+      const client_ref = records[i]['VERPFLICHTUNGSNUMMER'];
+
+      // set regular expression that matches all placeholders in the temaplte.
+      // For example, it matches two times for: "Hello {{ FIRSTNAME }}, you have an appoitnment at {{DATE}}!"
+      const regexp = /\{\{\s?([\w\d]+)\s?\}\}/g;
+
+      // now, find all placeholders in the template text by using the regex above
+      const matchArrays = [...text.matchAll(regexp)];
+
+      // for each placeholder, replace it with the value of the csv column that it references
+      matchArrays.forEach((array) => {
+        text = text.replaceAll(array[0], records[i][`${array[1]}`]);
+      });
+      if (utils.checkSenderIdValid(senderNumber)) {
         try {
           const response = await smsService.sendSms(
-            records[i]['VERPFLICHTUNGSNUMMER'],
-            records[i]['EOSTEAMRUECKRUFNUMMER'],
-            records[i]['ANREDE'],
+            senderNumber,
+            to,
+            text,
             process.env.apikey,
             process.env.apiSecret,
             'https://rest.nexmo.com/sms/json',
-            '12',
+            client_ref,
             rateLimitAxios
           );
           const { messages } = response;
@@ -297,7 +376,6 @@ const sendSms = async (records) => {
           rej(e);
         }
       } else {
-        ``;
         console.log('no valid senderId');
       }
     }

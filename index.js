@@ -166,6 +166,53 @@ app.get('/dfiles', async (req, res) => {
   }
 });
 
+// Scheduler API that is responsible for starting or stopping the neru scheduler that constantly checks for new csv files in the neru assets directory that was specified
+// The endAtDate and maxInvocations should be removed unless in debug mode, because this scheduler should always be running as a cron job.
+// We could use an env var to define the timeframe or cron for when it should run.
+app.post('/scheduler', async (req, res) => {
+  const { command, maxInvocations } = req.body;
+  const session = neru.createSession();
+  const scheduler = new Scheduler(session);
+
+  if (command == 'start') {
+    // create scheduler with fix name that checks for new files and sends them
+    let startAtDate = new Date(); // default is now
+
+    // TODO: debug stuff... change later or simply do not supply a maxInvocations parameter
+    // the following block limits the time and invocations for how often the scheduler can run,
+    // this is in in case the demo fail and we don't want dead schedulers ghosting around calling apis every minute forever
+    let endAtDate = new Date();
+    endAtDate.setDate(endAtDate.getDate() + 1); // runs for max 1 day
+    let until = {};
+    let maxInvocationsInt = parseInt(maxInvocations);
+    if (maxInvocations && maxInvocationsInt && maxInvocationsInt > 0) {
+      until = {
+        until: {
+          date: endAtDate.toISOString(), // just ot be sure also limit days for demo purpose
+          maxInvocations: maxInvocationsInt, // max 1 hour with one invocation per minute
+        },
+      };
+    }
+
+    const schedulerCreated = await scheduler
+      .startAt({
+        id: 'checkandsender',
+        startAt: startAtDate.toISOString(),
+        callback: '/checkandsend',
+        interval: {
+          cron: CRONJOB_DEFINITION,
+          ...until,
+        },
+      })
+      .execute();
+    res.json({ schedulerCreated });
+  } else if (command == 'stop') {
+    // delete scheduler with fix name
+    const schedulerDeleted = await scheduler.cancel('checkandsender').execute();
+    res.json({ schedulerDeleted });
+  }
+});
+
 app.post('/checkandsend', async (req, res) => {
   console.log('Checking for files and sending if new CSV files exist...');
   const FILENAME = req.body.prefix || '/test.csv';
@@ -285,9 +332,6 @@ const writeResults = async (results) => {
     .catch((e) =>
       console.log(`Something wrong while writting the output csv ${e}`)
     );
-  // } else {
-  //   console.log('no sending results');
-  // }
 };
 
 app.get('/state', async (req, res) => {

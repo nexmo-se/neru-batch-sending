@@ -157,10 +157,13 @@ app.get('/dfiles', async (req, res) => {
   try {
     const session = neru.createSession();
     const assets = new Assets(session);
-    const assetlist = await assets.binary('send/test.csv').execute();
+    // const asset = await assets.getRemoteFile('send/test.csv').execute();
+    const assetlist = await assets
+      .uploadFiles(['smsresults.csv'], 'send/')
+      .execute();
     console.log(assetlist);
 
-    res.send(assetlist);
+    res.send('okay');
   } catch (e) {
     console.log(e);
   }
@@ -234,6 +237,10 @@ app.post('/checkandsend', async (req, res) => {
 
     const newCheck = new Date().toISOString();
     const savedNewCheck = await globalState.set('lastCsvCheck', newCheck);
+    // const savedNewCheck = await globalState.set('lastCsvCheck', newCheck);
+    // const savedNewCheck = await globalState.set('lastCsvCheck', {
+    //   [date]: JSON.stringify({ newCheck }),
+    // });
 
     let toBeProcessed = [];
 
@@ -248,10 +255,9 @@ app.post('/checkandsend', async (req, res) => {
       if (
         file &&
         file.name &&
-        file.name.endsWith('.csv')
-
+        file.name.endsWith('.csv') &&
         //TO DO: check why this is not true
-        // && (!lastCheck || new Date(file.lastModified) > new Date(lastCheck))
+        (!lastCheck || new Date(file.lastModified) > new Date(lastCheck))
       ) {
         toBeProcessed.push('/' + file.name);
       } else {
@@ -270,28 +276,29 @@ app.post('/checkandsend', async (req, res) => {
       // process and send the file
       console.log('processing file');
 
-      asset = await assets.get(filename).execute();
-
-      const fileBuffer = Buffer.from(asset.res.content, 'base64');
-      // console.log('content: ', fileBuffer.toString());
+      asset = await assets.getRemoteFile(filename).execute();
+      const fileBuffer = asset;
       records = csvService.fromCsvSync(fileBuffer.toString(), {
         columns: true,
         delimiter: ';',
       });
+      console.log(records);
       const secondsTillEndOfDay = utils.secondsTillEndOfDay(new Date());
 
       //only send if there's enough time till the end of the working day
       if (secondsTillEndOfDay > parseInt((records.length - 1) / 30)) {
         const sendingResults = await sendSms(records);
 
-        // await writeResults(sendingResults);
+        await writeResults(sendingResults);
+        const result = await assets
+          .uploadFiles(['smsresults.csv'], `output/`)
+          .execute();
+        console.log(result);
       } else {
         console.log('there is not time');
       }
-      // await assets.copy('smsresults.csv', 'csv/');
-
       // save info that file was processed already
-      // savedAsProcessedFile = await globalState.rpush(PROCESSEDFILES, FILENAME);
+      savedAsProcessedFile = await globalState.rpush(PROCESSEDFILES, FILENAME);
     });
     res.sendStatus(200);
   } catch (e) {
@@ -334,12 +341,6 @@ const writeResults = async (results) => {
     );
 };
 
-app.get('/state', async (req, res) => {
-  const globalState = neru.getGlobalState();
-  const templates = await globalState.hgetall(TEMPLATES_TABLENAME);
-  res.send(templates);
-});
-
 const sendSms = async (records) => {
   let smsSendingResults = [];
   const globalState = neru.getGlobalState();
@@ -368,13 +369,13 @@ const sendSms = async (records) => {
       //prod end here
 
       // get the template text into a variable
-      let text = template.text;
+      let text = template?.text;
 
       const senderNumber = `${records[i][
-        `${template.senderIdField}`
-      ].replaceAll('+', '')}`;
+        `${template?.senderIdField}`
+      ]?.replaceAll('+', '')}`;
 
-      const to = `${records[i][CSV_PHONE_NUMBER_COLUMN_NAME].replaceAll(
+      const to = `${records[i][CSV_PHONE_NUMBER_COLUMN_NAME]?.replaceAll(
         '+',
         ''
       )}`;
@@ -384,15 +385,16 @@ const sendSms = async (records) => {
       // set regular expression that matches all placeholders in the temaplte.
       // For example, it matches two times for: "Hello {{ FIRSTNAME }}, you have an appoitnment at {{DATE}}!"
       const regexp = /\{\{\s?([\w\d]+)\s?\}\}/g;
+      if (text) {
+        // now, find all placeholders in the template text by using the regex above
+        const matchArrays = [...text.matchAll(regexp)];
 
-      // now, find all placeholders in the template text by using the regex above
-      const matchArrays = [...text.matchAll(regexp)];
-
-      // for each placeholder, replace it with the value of the csv column that it references
-      matchArrays.forEach((array) => {
-        text = text.replaceAll(array[0], records[i][`${array[1]}`]);
-      });
-      if (utils.checkSenderIdValid(senderNumber)) {
+        // for each placeholder, replace it with the value of the csv column that it references
+        matchArrays.forEach((array) => {
+          text = text.replaceAll(array[0], records[i][`${array[1]}`]);
+        });
+      }
+      if (utils.checkSenderIdValid(senderNumber) && to && text) {
         try {
           const response = await smsService.sendSms(
             senderNumber,
@@ -420,7 +422,11 @@ const sendSms = async (records) => {
           rej(e);
         }
       } else {
-        console.log('no valid senderId');
+        smsSendingResults.push({
+          to: to,
+          'message-id': undefined,
+          status: 'not sent',
+        });
       }
     }
     res(smsSendingResults);

@@ -23,7 +23,7 @@ app.use(cors());
 const fs = require('fs');
 
 const csvWriter = createCsvWriter({
-  path: 'smsresults.csv',
+  path: 'output.csv',
   header: [
     { id: 'to', title: 'to' },
     { id: 'message-id', title: 'message-id' },
@@ -256,7 +256,6 @@ app.post('/checkandsend', async (req, res) => {
         file &&
         file.name &&
         file.name.endsWith('.csv') &&
-        //TO DO: check why this is not true
         (!lastCheck || new Date(file.lastModified) > new Date(lastCheck))
       ) {
         toBeProcessed.push('/' + file.name);
@@ -282,24 +281,26 @@ app.post('/checkandsend', async (req, res) => {
         columns: true,
         delimiter: ';',
       });
-      console.log(records);
-      const secondsTillEndOfDay = utils.secondsTillEndOfDay(new Date());
+      const secondsTillEndOfDay = utils.secondsTillEndOfDay();
 
       //only send if there's enough time till the end of the working day
-      if (secondsTillEndOfDay > parseInt((records.length - 1) / 30)) {
+      if (secondsTillEndOfDay > parseInt((records.length - 1) / tps)) {
         const sendingResults = await sendSms(records);
 
-        await writeResults(sendingResults);
+        await writeResults(sendingResults, filename);
         const result = await assets
-          .uploadFiles(['smsresults.csv'], `output/`)
+          .uploadFiles(['output.csv'], `output/`)
           .execute();
-        console.log(result);
       } else {
         console.log('there is not time');
       }
+      console.log('removing' + filename);
+
       // save info that file was processed already
+      // await assets.remove(filename).execute();
       savedAsProcessedFile = await globalState.rpush(PROCESSEDFILES, FILENAME);
     });
+
     res.sendStatus(200);
   } catch (e) {
     console.log('check and send error: ', e.message);
@@ -347,26 +348,12 @@ const sendSms = async (records) => {
 
   return new Promise(async (res, rej) => {
     for (let i = 0; i < records.length; i++) {
-      // const template = {
-      //   id: 'bhg',
-      //   text: 'Hello you',
-      //   senderIdField: 'EOSTEAMRUECKRUFNUMMER',
-      //   updatedAt: '2022-09-28T12:18:49.035Z',
-      // };
-
-      //ID;EOSTEAMRUECKRUFNUMMER;ID_SMSTEXT;ANREDE;NACHNAME;VERPFLICHTUNGSNUMMER;MOBILTELEFONNUMMER;EMAILADRESSE;FELD01;FELD02;FELD03;FELD04;FELD05;FELD06;FELD07;FELD08;FELD09;FELD10
-
-      //this is for prod
       const templateJson = await globalState.hget(
         TEMPLATES_TABLENAME,
         records[i][CSV_TEMPLATE_ID_COLUMN_NAME]
       );
-      console.log(templateJson);
 
       const template = await JSON.parse(templateJson);
-      console.log(template);
-
-      //prod end here
 
       // get the template text into a variable
       let text = template?.text;

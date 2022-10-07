@@ -13,7 +13,7 @@ const csvService = require('./services/csv');
 const { neru, Assets, Scheduler } = require('neru-alpha');
 const smsService = require('./services/sms');
 const rateLimiterService = require('./services/rateLimiter');
-const tps = parseInt(process.env.TPS || '30', 10);
+const tps = parseInt(process.env.tps || '30', 10);
 const rateLimitAxios = rateLimiterService.newInstance(tps);
 const createCsvWriter = require('csv-writer').createObjectCsvWriter;
 const utils = require('./utils');
@@ -306,10 +306,6 @@ app.post('/checkandsend', async (req, res) => {
 
     const newCheck = new Date().toISOString();
     const savedNewCheck = await globalState.set('lastCsvCheck', newCheck);
-    // const savedNewCheck = await globalState.set('lastCsvCheck', newCheck);
-    // const savedNewCheck = await globalState.set('lastCsvCheck', {
-    //   [date]: JSON.stringify({ newCheck }),
-    // });
 
     let toBeProcessed = [];
 
@@ -343,7 +339,6 @@ app.post('/checkandsend', async (req, res) => {
     toBeProcessed.forEach(async (filename) => {
       // process and send the file
       console.log('processing file');
-
       asset = await assets.getRemoteFile(filename).execute();
       const fileBuffer = asset;
       records = csvService.fromCsvSync(fileBuffer.toString(), {
@@ -358,6 +353,16 @@ app.post('/checkandsend', async (req, res) => {
         const path = filename.split('/')[2].replace('.csv', '-output.csv');
         await writeResults(sendingResults, path);
         const result = await assets.uploadFiles([path], `output/`).execute();
+        const processedPath = filename
+          .split('/')[2]
+          .replace('.csv', '-processed.csv');
+        const fileMoved = await moveFile(
+          assets,
+          processedPath,
+          'processed/',
+          records,
+          filename
+        );
       } else {
         console.log(
           'there is no time to send all the records. Splitting file... '
@@ -366,8 +371,23 @@ app.post('/checkandsend', async (req, res) => {
         //10 % security
         const numberOfRecordsToSend = parseInt(tps * sendingTime * 0.9);
         //slice does not include the element
+        //send the messages until the end of the allowed period
         const sendingRecords = records.slice(0, numberOfRecordsToSend);
         const sendingResults = await sendSms(sendingRecords);
+        //write the resuls file
+        const path = filename.split('/')[2].replace('.csv', '-1-output.csv');
+        await writeResults(sendingResults, path);
+        const processedPath = filename
+          .split('/')[2]
+          .replace('.csv', '-1-processed.csv');
+        const fileMoved = await moveFile(
+          assets,
+          processedPath,
+          'processed/',
+          records,
+          filename
+        );
+        //upload the pending records to be processed next morning
         const newFile = records.slice(numberOfRecordsToSend, records.length);
         const pathToFile = filename.split('/')[2].replace('.csv', '-1.csv');
         await writeResults(newFile, pathToFile);
@@ -375,23 +395,7 @@ app.post('/checkandsend', async (req, res) => {
           .uploadFiles([processedPath], `send/`)
           .execute();
       }
-
-      const processedPath = filename
-        .split('/')[2]
-        .replace('.csv', '-processed.csv');
-      // await writeResults(records, processedPath);
-      // const result = await assets
-      //   .uploadFiles([processedPath], `processed/`)
-      //   .execute();
-      const fileMoved = await moveFile(
-        assets,
-        processedPath,
-        'processed/',
-        records,
-        filename
-      );
       // save info that file was processed already
-
       savedAsProcessedFile = await globalState.rpush(PROCESSEDFILES, FILENAME);
     });
 
@@ -529,6 +533,7 @@ const moveFile = (assets, pathFrom, pathTo, records, filename) => {
       await assets.remove(filename).execute();
       res();
     } catch (e) {
+      console.log(`Something wrong while moving the csv file ${e}`);
       rej(e);
     }
   });

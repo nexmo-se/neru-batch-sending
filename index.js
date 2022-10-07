@@ -377,14 +377,15 @@ app.post('/checkandsend', async (req, res) => {
         //write the resuls file
         const path = filename.split('/')[2].replace('.csv', '-1-output.csv');
         await writeResults(sendingResults, path);
+        //move the subfile that has been processed to the processed folder
         const processedPath = filename
           .split('/')[2]
           .replace('.csv', '-1-processed.csv');
-        const fileMoved = await moveFile(
+        await moveFile(
           assets,
           processedPath,
           'processed/',
-          records,
+          sendingRecords,
           filename
         );
         //upload the pending records to be processed next morning
@@ -392,7 +393,7 @@ app.post('/checkandsend', async (req, res) => {
         const pathToFile = filename.split('/')[2].replace('.csv', '-1.csv');
         await writeResults(newFile, pathToFile);
         const result = await assets
-          .uploadFiles([processedPath], `send/`)
+          .uploadFiles([pathToFile], `send/`)
           .execute();
       }
       // save info that file was processed already

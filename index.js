@@ -4,11 +4,13 @@ const bodyParser = require('body-parser');
 const app = express();
 const cors = require('cors');
 const path = require('path');
-const multer = require('multer');
-const memoryStorage = multer.memoryStorage();
-const upload = multer({ storage: memoryStorage }).single('file');
+const flash = require('express-flash');
+const session = require('express-session');
+const methodOverride = require('method-override');
+const passport = require('passport');
+
 const csvService = require('./services/csv');
-const { neru, Assets, Scheduler, Messages } = require('neru-alpha');
+const { neru, Assets, Scheduler } = require('neru-alpha');
 const smsService = require('./services/sms');
 const rateLimiterService = require('./services/rateLimiter');
 const tps = parseInt(process.env.TPS || '30', 10);
@@ -17,19 +19,45 @@ const createCsvWriter = require('csv-writer').createObjectCsvWriter;
 const utils = require('./utils');
 const dotenv = require('dotenv');
 const uuid = require('uuidv4');
+const initializePassport = require('./passport-strategy');
+
 dotenv.config();
 app.use(cors());
 
-const fs = require('fs');
+app.use(flash());
+app.use(
+  session({
+    secret: process.env.apiSecret,
+    resave: false,
+    saveUninitialized: false,
+  })
+);
 
-const csvWriter = createCsvWriter({
-  path: 'output.csv',
-  header: [
-    { id: 'to', title: 'to' },
-    { id: 'message-id', title: 'message-id' },
-    { id: 'status', title: 'status' },
-  ],
-});
+app.use(passport.initialize());
+app.use(passport.session());
+app.use(methodOverride('_method'));
+const users = [
+  {
+    id: 1,
+    name: 'Javi',
+    email: 'javiermolsanz@gmail.com',
+    password: '1234',
+  },
+];
+
+initializePassport(
+  passport,
+  async (email) => {
+    const globalState = neru.getGlobalState();
+    const customer = await globalState.hget('users', email);
+    return customer;
+    if (!customer) return null;
+    // users.find((user) => user.email === email);
+  },
+  (id) => users.find((user) => user.id === id)
+);
+
+const fs = require('fs');
 
 app.use(bodyParser.urlencoded({ extended: false }));
 app.use(bodyParser.json());
@@ -64,7 +92,7 @@ const ON_CRASH_CANCEL_MONITOR = false;
 
 // TEMPLATE VIEWS START
 // Get a list of templates as ejs view
-app.get('/templates', async (req, res) => {
+app.get('/templates', checkAuthenticated, async (req, res) => {
   const globalState = neru.getGlobalState();
   const templates = await globalState.hgetall(TEMPLATES_TABLENAME);
   const parsedTemplates = Object.keys(templates).map((key) => {
@@ -76,10 +104,27 @@ app.get('/templates', async (req, res) => {
 });
 
 // Get a form to create a new template
-app.get('/templates/new', async (req, res) => {
+app.get('/templates/new', checkAuthenticated, async (req, res) => {
   res.render('templates/new', {});
 });
 // TEMPLATE VIEWS END
+
+app.get('/login', checkNotAuthenticated, (req, res) => {
+  res.render('templates/login', {});
+});
+
+app.post(
+  '/login',
+  checkNotAuthenticated,
+  passport.authenticate('local', {
+    successRedirect: '/templates/new',
+    failureRedirect: '/login',
+    failureFlash: true,
+  })
+);
+app.get('/', (req, res) => {
+  res.redirect('/login');
+});
 
 // TEMPLATE API START
 // Get a list of all templates
@@ -216,6 +261,30 @@ app.post('/scheduler', async (req, res) => {
   }
 });
 
+app.get('/state', async (req, res) => {
+  const globalState = neru.getGlobalState();
+  const emailBueno = 'javiermolsanz@gmail.com';
+  const created = await globalState.hset('users', {
+    [emailBueno]: JSON.stringify({
+      id: 1,
+      emailBueno: 'javiermolsanz@gmail.com',
+      password: 'sdd',
+    }),
+  });
+  await globalState.hset('users', {
+    ['wd']: JSON.stringify({
+      id: 1,
+      emailBueno: 'javiesddrmolsanz@gmail.com',
+      password: 'sdsssd',
+    }),
+  });
+  // const savedNewCheck = await globalState.set('filesProcessing', 1);
+  // const lastCheck = await globalState.get('filesProcessing');
+  const customer = await globalState.hgetall('users');
+  if (customer) res.send(customer);
+  else res.send('no customer found');
+});
+
 app.post('/checkandsend', async (req, res) => {
   console.log('Checking for files and sending if new CSV files exist...');
   const FILENAME = req.body.prefix || '/test.csv';
@@ -282,22 +351,47 @@ app.post('/checkandsend', async (req, res) => {
         delimiter: ';',
       });
       const secondsTillEndOfDay = utils.secondsTillEndOfDay();
-
+      const secondsNeededToSend = parseInt((records.length - 1) / tps);
       //only send if there's enough time till the end of the working day
-      if (secondsTillEndOfDay > parseInt((records.length - 1) / tps)) {
+      if (secondsTillEndOfDay > secondsNeededToSend) {
         const sendingResults = await sendSms(records);
-
-        await writeResults(sendingResults, filename);
-        const result = await assets
-          .uploadFiles(['output.csv'], `output/`)
-          .execute();
+        const path = filename.split('/')[2].replace('.csv', '-output.csv');
+        await writeResults(sendingResults, path);
+        const result = await assets.uploadFiles([path], `output/`).execute();
       } else {
-        console.log('there is not time');
+        console.log(
+          'there is no time to send all the records. Splitting file... '
+        );
+        const sendingTime = secondsNeededToSend - secondsTillEndOfDay;
+        //10 % security
+        const numberOfRecordsToSend = parseInt(tps * sendingTime * 0.9);
+        //slice does not include the element
+        const sendingRecords = records.slice(0, numberOfRecordsToSend);
+        const sendingResults = await sendSms(sendingRecords);
+        const newFile = records.slice(numberOfRecordsToSend, records.length);
+        const pathToFile = filename.split('/')[2].replace('.csv', '-1.csv');
+        await writeResults(newFile, pathToFile);
+        const result = await assets
+          .uploadFiles([processedPath], `send/`)
+          .execute();
       }
-      console.log('removing' + filename);
 
+      const processedPath = filename
+        .split('/')[2]
+        .replace('.csv', '-processed.csv');
+      // await writeResults(records, processedPath);
+      // const result = await assets
+      //   .uploadFiles([processedPath], `processed/`)
+      //   .execute();
+      const fileMoved = await moveFile(
+        assets,
+        processedPath,
+        'processed/',
+        records,
+        filename
+      );
       // save info that file was processed already
-      // await assets.remove(filename).execute();
+
       savedAsProcessedFile = await globalState.rpush(PROCESSEDFILES, FILENAME);
     });
 
@@ -317,10 +411,11 @@ app.get('/test', async (req, res) => {
     })
     .on('end', async () => {
       const secondsTillEndOfDay = utils.secondsTillEndOfDay(new Date());
+      console.log(results);
 
       if (secondsTillEndOfDay > parseInt((results.length - 1) / 30)) {
         // modifyRecords(results);
-        const sendingResults = await sendSms(results);
+        // const sendingResults = await sendSms(results);
         // await writeResults(sendingResults);
 
         // res.json(sendingResults);
@@ -330,7 +425,15 @@ app.get('/test', async (req, res) => {
     });
 });
 
-const writeResults = async (results) => {
+const writeResults = async (results, path) => {
+  const csvWriter = createCsvWriter({
+    path: path,
+    header: [
+      { id: 'to', title: 'to' },
+      { id: 'message-id', title: 'message-id' },
+      { id: 'status', title: 'status' },
+    ],
+  });
   // if (results.length) {
   csvWriter
     .writeRecords(results) // returns a promise
@@ -352,12 +455,9 @@ const sendSms = async (records) => {
         TEMPLATES_TABLENAME,
         records[i][CSV_TEMPLATE_ID_COLUMN_NAME]
       );
-
       const template = await JSON.parse(templateJson);
-
       // get the template text into a variable
       let text = template?.text;
-
       const senderNumber = `${records[i][
         `${template?.senderIdField}`
       ]?.replaceAll('+', '')}`;
@@ -394,8 +494,6 @@ const sendSms = async (records) => {
             rateLimitAxios
           );
           const { messages } = response;
-          console.log(messages);
-
           smsSendingResults.push({
             to: messages[0].to,
             'message-id': messages[0]?.['message-id']
@@ -404,7 +502,7 @@ const sendSms = async (records) => {
             status: messages[0]['status'] === '0' ? 'sent' : 'not sent',
           });
         } catch (e) {
-          console.log('error sending sms');
+          console.log('error sending sms ' + e);
 
           rej(e);
         }
@@ -420,8 +518,48 @@ const sendSms = async (records) => {
   });
 };
 
-app.listen(process.env.NERU_APP_PORT || 3000, () => {
+const moveFile = (assets, pathFrom, pathTo, records, filename) => {
+  return new Promise(async (res, rej) => {
+    try {
+      await writeResults(records, pathFrom);
+      console.log('uploading file to processed folder');
+
+      await assets.uploadFiles([pathFrom], pathTo).execute();
+      console.log('removing file from send folder' + filename);
+      await assets.remove(filename).execute();
+      res();
+    } catch (e) {
+      rej(e);
+    }
+  });
+};
+
+function checkAuthenticated(req, res, next) {
+  if (req.isAuthenticated()) {
+    return next();
+  }
+
+  res.redirect('/login');
+}
+function checkNotAuthenticated(req, res, next) {
+  if (req.isAuthenticated()) {
+    return res.redirect('/templates');
+  }
+  next();
+}
+
+app.listen(process.env.NERU_APP_PORT || 3000, async () => {
   console.log(`listening on port ${process.env.NERU_APP_PORT}!`);
+  const globalState = neru.getGlobalState();
+  const email = 'javiermolsanz@gmail.com';
+  await globalState.hset('users', {
+    [email]: JSON.stringify({
+      id: 1,
+      email: email,
+      name: 'Javi',
+      password: '1234',
+    }),
+  });
   // start();
 });
 // const customers = promise().then((result) => console.log(result));

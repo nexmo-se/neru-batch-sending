@@ -1,6 +1,28 @@
 // eslint-disable-next-line no-control-regex
 const isUnicode = (text) => /[^\u0000-\u00ff]/.test(text);
 
+const sendNothing = () => {
+  return new Promise((res, rej) => {
+    setTimeout(() => {
+      res({
+        'message-count': '1',
+        messages: [
+          {
+            to: '447700900000',
+            'message-id': '0A0000000123ABCD1',
+            status: '0',
+            'remaining-balance': '3.14159265',
+            'message-price': '0.03330000',
+            network: '12345',
+            'client-ref': 'my-personal-reference',
+            'account-ref': 'customer1234',
+          },
+        ],
+      });
+    }, 12.5);
+  });
+};
+
 const sendSms = (
   from,
   to,
@@ -13,8 +35,6 @@ const sendSms = (
 ) => {
   // Determine proper type to send as
   const type = isUnicode(text) ? 'unicode' : 'text';
-
-  console.log('sending sms to ' + to);
 
   // Constructing the API Request Body
   const body = {
@@ -59,4 +79,5 @@ const sendSms = (
 
 module.exports = {
   sendSms,
+  sendNothing,
 };

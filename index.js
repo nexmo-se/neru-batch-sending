@@ -409,25 +409,42 @@ app.post('/checkandsend', async (req, res) => {
 
 app.get('/test', async (req, res) => {
   const results = [];
-  fs.createReadStream('test.csv')
+  fs.createReadStream('testlarge.csv')
     .pipe(csv({ separator: ';' }))
     .on('data', (data) => {
       results.push(data);
     })
     .on('end', async () => {
+      let smsSendingResults = [];
       const secondsTillEndOfDay = utils.secondsTillEndOfDay(new Date());
-      console.log(results);
+      // console.log(results);
 
       if (secondsTillEndOfDay > parseInt((results.length - 1) / 30)) {
+        // results.forEach(async (record) => {
+        for (let i = 0; i < results.length; i++) {
+          const sendingResults = await smsService.sendNothing(results[i]);
+          const { messages } = sendingResults;
+          // console.log(messages);
+
+          smsSendingResults.push({
+            to: messages[0].to,
+            'message-id': messages[0]?.['message-id']
+              ? messages[0]['message-id']
+              : messages[0]?.['error-text'],
+            status: messages[0]['status'] === '0' ? 'sent' : 'not sent',
+          });
+        }
+        // });
         // modifyRecords(results);
         // const sendingResults = await sendSms(results);
-        // await writeResults(sendingResults);
+        await writeResults(smsSendingResults, `testoutput${Math.random()}.csv`);
 
         // res.json(sendingResults);
-        res.sendStatus(200);
       }
+
       // res.sendStatus(200);
     });
+  res.sendStatus(200);
 });
 
 const writeResults = async (results, path) => {
@@ -453,15 +470,18 @@ const writeResults = async (results, path) => {
 const sendSms = async (records) => {
   let smsSendingResults = [];
   const globalState = neru.getGlobalState();
+  const templates = await globalState.hgetall(TEMPLATES_TABLENAME);
+  const parsedTemplates = Object.keys(templates).map((key) => {
+    const data = JSON.parse(templates[key]);
+    return { ...data };
+  });
 
   return new Promise(async (res, rej) => {
     for (let i = 0; i < records.length; i++) {
-      const templateJson = await globalState.hget(
-        TEMPLATES_TABLENAME,
-        records[i][CSV_TEMPLATE_ID_COLUMN_NAME]
+      const template = parsedTemplates.find(
+        (template) => template.id === records[i][CSV_TEMPLATE_ID_COLUMN_NAME]
       );
-      const template = await JSON.parse(templateJson);
-      // get the template text into a variable
+
       let text = template?.text;
       const senderNumber = `${records[i][
         `${template?.senderIdField}`

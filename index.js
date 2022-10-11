@@ -278,9 +278,12 @@ app.get('/state', async (req, res) => {
       password: 'sdsssd',
     }),
   });
+  // await globalState.hdel('users', 'wd');
   // const savedNewCheck = await globalState.set('filesProcessing', 1);
   // const lastCheck = await globalState.get('filesProcessing');
+
   const customer = await globalState.hgetall('users');
+
   if (customer) res.send(customer);
   else res.send('no customer found');
 });
@@ -350,8 +353,17 @@ app.post('/checkandsend', async (req, res) => {
       //only send if there's enough time till the end of the working day
       if (secondsTillEndOfDay > secondsNeededToSend) {
         const sendingResults = await sendSms(records);
+        const resultsToWrite = sendingResults.map((result) => {
+          return {
+            to: result.to ? result.to : undefined,
+            'message-id': result['message-id']
+              ? result['message-id']
+              : result['error-text'],
+            status: result['status'] === '0' ? 'sent' : 'not sent',
+          };
+        });
         const path = filename.split('/')[2].replace('.csv', '-output.csv');
-        await writeResults(sendingResults, path);
+        await writeResults(resultsToWrite, path);
         const result = await assets.uploadFiles([path], `output/`).execute();
         const processedPath = filename
           .split('/')[2]
@@ -374,9 +386,18 @@ app.post('/checkandsend', async (req, res) => {
         //send the messages until the end of the allowed period
         const sendingRecords = records.slice(0, numberOfRecordsToSend);
         const sendingResults = await sendSms(sendingRecords);
+        const resultsToWrite = sendingResults.map((result) => {
+          return {
+            to: result.to ? result.to : undefined,
+            'message-id': result['message-id']
+              ? result['message-id']
+              : result['error-text'],
+            status: result['status'] === '0' ? 'sent' : 'not sent',
+          };
+        });
         //write the resuls file
         const path = filename.split('/')[2].replace('.csv', '-1-output.csv');
-        await writeResults(sendingResults, path);
+        await writeResults(resultsToWrite, path);
         //move the subfile that has been processed to the processed folder
         const processedPath = filename
           .split('/')[2]
@@ -468,7 +489,6 @@ const writeResults = async (results, path) => {
 };
 
 const sendSms = async (records) => {
-  let smsSendingResults = [];
   const globalState = neru.getGlobalState();
   const templates = await globalState.hgetall(TEMPLATES_TABLENAME);
   const parsedTemplates = Object.keys(templates).map((key) => {
@@ -476,71 +496,56 @@ const sendSms = async (records) => {
     return { ...data };
   });
 
-  return new Promise(async (res, rej) => {
-    for (let i = 0; i < records.length; i++) {
-      const template = parsedTemplates.find(
-        (template) => template.id === records[i][CSV_TEMPLATE_ID_COLUMN_NAME]
-      );
+  try {
+    const promises = records.map(async (record) => {
+      try {
+        const template = parsedTemplates.find(
+          (template) => template.id === record[CSV_TEMPLATE_ID_COLUMN_NAME]
+        );
+        let text = template?.text;
+        const senderNumber = `${record[
+          `${template?.senderIdField}`
+        ]?.replaceAll('+', '')}`;
 
-      let text = template?.text;
-      const senderNumber = `${records[i][
-        `${template?.senderIdField}`
-      ]?.replaceAll('+', '')}`;
+        const to = `${record[CSV_PHONE_NUMBER_COLUMN_NAME]?.replaceAll(
+          '+',
+          ''
+        )}`;
+        const client_ref = record['VERPFLICHTUNGSNUMMER'];
 
-      const to = `${records[i][CSV_PHONE_NUMBER_COLUMN_NAME]?.replaceAll(
-        '+',
-        ''
-      )}`;
+        const regexp = /\{\{\s?([\w\d]+)\s?\}\}/g;
+        if (text) {
+          // now, find all placeholders in the template text by using the regex above
+          const matchArrays = [...text.matchAll(regexp)];
 
-      const client_ref = records[i]['VERPFLICHTUNGSNUMMER'];
-
-      // set regular expression that matches all placeholders in the temaplte.
-      // For example, it matches two times for: "Hello {{ FIRSTNAME }}, you have an appoitnment at {{DATE}}!"
-      const regexp = /\{\{\s?([\w\d]+)\s?\}\}/g;
-      if (text) {
-        // now, find all placeholders in the template text by using the regex above
-        const matchArrays = [...text.matchAll(regexp)];
-
-        // for each placeholder, replace it with the value of the csv column that it references
-        matchArrays.forEach((array) => {
-          text = text.replaceAll(array[0], records[i][`${array[1]}`]);
-        });
-      }
-      if (utils.checkSenderIdValid(senderNumber) && to && text) {
-        try {
-          const response = await smsService.sendSms(
-            senderNumber,
-            to,
-            text,
-            process.env.apikey,
-            process.env.apiSecret,
-            'https://rest.nexmo.com/sms/json',
-            client_ref,
-            rateLimitAxios
-          );
-          const { messages } = response;
-          smsSendingResults.push({
-            to: messages[0].to,
-            'message-id': messages[0]?.['message-id']
-              ? messages[0]['message-id']
-              : messages[0]?.['error-text'],
-            status: messages[0]['status'] === '0' ? 'sent' : 'not sent',
+          // for each placeholder, replace it with the value of the csv column that it references
+          matchArrays.forEach((array) => {
+            text = text.replaceAll(array[0], record[`${array[1]}`]);
           });
-        } catch (e) {
-          console.log('error sending sms ' + e);
-
-          rej(e);
         }
-      } else {
-        smsSendingResults.push({
-          to: to,
-          'message-id': undefined,
-          status: 'not sent',
-        });
+
+        // Add to queue
+        const result = await smsService.sendSms(
+          senderNumber,
+          to,
+          text,
+          process.env.apikey,
+          process.env.apiSecret,
+          'https://rest.nexmo.com/sms/json',
+          client_ref,
+          rateLimitAxios
+        );
+        return Promise.resolve(Object.assign({}, result.messages[0]));
+      } catch (error) {
+        return Promise.reject(error);
       }
-    }
-    res(smsSendingResults);
-  });
+    });
+    const results = await Promise.all(promises);
+    return results;
+  } catch (error) {
+    console.error(error);
+    return error;
+  }
 };
 
 const moveFile = (assets, pathFrom, pathTo, records, filename) => {

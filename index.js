@@ -11,6 +11,7 @@ const passport = require('passport');
 const apikey = process.env.apikey;
 const apiSecret = process.env.apiSecret;
 const api_url = 'https://rest.nexmo.com/sms/json';
+const cookieSession = require('cookie-session');
 
 const csvService = require('./services/csv');
 const { neru, Assets, Scheduler } = require('neru-alpha');
@@ -28,36 +29,38 @@ dotenv.config();
 app.use(cors());
 
 app.use(flash());
+
 app.use(
-  session({
-    secret: process.env.apiSecret,
+  cookieSession({
+    name: 'session',
+    keys: ['secretcat'],
+    secure: false,
     resave: false,
-    saveUninitialized: false,
+    // Cookie Options
+    maxAge: 24 * 60 * 60 * 1000, // 24 hours
   })
 );
 
 app.use(passport.initialize());
 app.use(passport.session());
 app.use(methodOverride('_method'));
-const users = [
-  {
-    id: 1,
-    name: 'Javi',
-    email: 'javiermolsanz@gmail.com',
-    password: '1234',
-  },
-];
 
 initializePassport(
   passport,
   async (email) => {
     const globalState = neru.getGlobalState();
     const customer = await globalState.hget('users', email);
-    return customer;
+    console.log('customer at index.js' + customer);
+
+    return JSON.parse(customer);
     if (!customer) return null;
     // users.find((user) => user.email === email);
   },
-  (id) => users.find((user) => user.id === id)
+  async (email) => {
+    const globalState = neru.getGlobalState();
+    const customer = await globalState.hget('users', email);
+    return customer;
+  }
 );
 
 const fs = require('fs');
@@ -102,6 +105,20 @@ app.get('/templates', checkAuthenticated, async (req, res) => {
   res.render('templates/index', { templates: parsedTemplates });
 });
 
+app.get('/dfiles', async (req, res) => {
+  try {
+    const session = neru.createSession();
+    const assets = new Assets(session);
+    // const asset = await assets.getRemoteFile('send/test.csv').execute();
+    const assetlist = assets.list('/send', false, 10).execute();
+    console.log(assetlist);
+
+    res.send('okay');
+  } catch (e) {
+    console.log(e);
+  }
+});
+
 // Get a form to create a new template
 app.get('/templates/new', checkAuthenticated, async (req, res) => {
   res.render('templates/new', {});
@@ -123,6 +140,33 @@ app.post(
 );
 app.get('/', (req, res) => {
   res.redirect('/login');
+});
+
+app.get('/state', async (req, res) => {
+  const globalState = neru.getGlobalState();
+  const emailBueno = 'javiermolsanz@gmail.com';
+  const created = await globalState.hset('users', {
+    [emailBueno]: JSON.stringify({
+      id: 1,
+      emailBueno: 'javiermolsanz@gmail.com',
+      password: 'sdd',
+    }),
+  });
+  await globalState.hset('users', {
+    ['wd']: JSON.stringify({
+      id: 1,
+      emailBueno: 'javiesddrmolsanz@gmail.com',
+      password: 'sdsssd',
+    }),
+  });
+  // await globalState.hdel('users', 'wd');
+  // const savedNewCheck = await globalState.set('filesProcessing', 1);
+  // const lastCheck = await globalState.get('filesProcessing');
+
+  const customer = await globalState.hgetall('users');
+
+  if (customer) res.send(customer);
+  else res.send('no customer found');
 });
 
 // TEMPLATE API START

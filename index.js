@@ -89,10 +89,6 @@ const CRONJOB_DEFINITION = '* * * * *';
 // cancel all monitoring schedulers when server crashes or not
 const ON_CRASH_CANCEL_MONITOR = false;
 
-// allow to parse json bodies and form data if needed
-
-// TODO: add simple authentication middleware like username/pw with express-session or passport.js for everything
-
 // TEMPLATE VIEWS START
 // Get a list of templates as ejs view
 app.get('/templates', checkAuthenticated, async (req, res) => {
@@ -153,20 +149,6 @@ app.get('/api/templates/:id', async (req, res) => {
   res.json(parsedTemplate);
 });
 
-app.get('/time', async (req, res) => {
-  const secondsTillEndOfDay = utils.secondsTillEndOfDay();
-
-  console.log('tps: ' + tps);
-
-  const secondsNeededToSend = parseInt(5000000 / tps);
-  console.log(`It would take me ${secondsNeededToSend} to send all files`);
-
-  const diff = secondsNeededToSend - secondsTillEndOfDay;
-  console.log(`${secondsTillEndOfDay} is the number of seconds I can be sending send and i will send ${secondsTillEndOfDay * tps}`);
-
-  res.sendStatus(200);
-});
-
 // Create a new template
 app.post('/api/templates', async (req, res) => {
   const globalState = neru.getGlobalState();
@@ -208,20 +190,6 @@ app.delete('/api/templates/:id', async (req, res) => {
   const globalState = neru.getGlobalState();
   const deleted = await globalState.hdel(TEMPLATES_TABLENAME, id);
   res.json({ success: true, deleted });
-});
-
-app.get('/dfiles', async (req, res) => {
-  try {
-    const session = neru.createSession();
-    const assets = new Assets(session);
-    // const asset = await assets.getRemoteFile('send/test.csv').execute();
-    const assetlist = await assets.uploadFiles(['smsresults.csv'], 'send/').execute();
-    console.log(assetlist);
-
-    res.send('okay');
-  } catch (e) {
-    console.log(e);
-  }
 });
 
 // Scheduler API that is responsible for starting or stopping the neru scheduler that constantly checks for new csv files in the neru assets directory that was specified
@@ -271,32 +239,29 @@ app.post('/scheduler', async (req, res) => {
   }
 });
 
-app.get('/state', async (req, res) => {
-  const globalState = neru.getGlobalState();
-  const emailBueno = 'javiermolsanz@gmail.com';
-  const created = await globalState.hset('users', {
-    [emailBueno]: JSON.stringify({
-      id: 1,
-      emailBueno: 'javiermolsanz@gmail.com',
-      password: 'sdd',
-    }),
-  });
-  await globalState.hset('users', {
-    ['wd']: JSON.stringify({
-      id: 1,
-      emailBueno: 'javiesddrmolsanz@gmail.com',
-      password: 'sdsssd',
-    }),
-  });
-  // await globalState.hdel('users', 'wd');
-  // const savedNewCheck = await globalState.set('filesProcessing', 1);
-  // const lastCheck = await globalState.get('filesProcessing');
+// app.get('/state', async (req, res) => {
+//   const globalState = neru.getGlobalState();
+//   const emailBueno = 'javiermolsanz@gmail.com';
+//   const created = await globalState.hset('users', {
+//     [emailBueno]: JSON.stringify({
+//       id: 1,
+//       emailBueno: 'javiermolsanz@gmail.com',
+//       password: 'sdd',
+//     }),
+//   });
+//   await globalState.hset('users', {
+//     ['wd']: JSON.stringify({
+//       id: 1,
+//       emailBueno: 'javiesddrmolsanz@gmail.com',
+//       password: 'sdsssd',
+//     }),
+//   });
 
-  const customer = await globalState.hgetall('users');
+//   const customer = await globalState.hgetall('users');
 
-  if (customer) res.send(customer);
-  else res.send('no customer found');
-});
+//   if (customer) res.send(customer);
+//   else res.send('no customer found');
+// });
 
 app.post('/checkandsend', async (req, res) => {
   console.log('Checking for files and sending if new CSV files exist...');
@@ -319,6 +284,7 @@ app.post('/checkandsend', async (req, res) => {
 
     const newCheck = new Date().toISOString();
     const savedNewCheck = await globalState.set('lastCsvCheck', newCheck);
+    const secondsTillEndOfDay = utils.secondsTillEndOfDay();
 
     let toBeProcessed = [];
 
@@ -342,7 +308,6 @@ app.post('/checkandsend', async (req, res) => {
 
     let asset;
     let records;
-    let responses = [];
     let savedAsProcessedFile;
 
     toBeProcessed.forEach(async (filename) => {
@@ -358,6 +323,7 @@ app.post('/checkandsend', async (req, res) => {
       const secondsNeededToSend = parseInt((records.length - 1) / tps);
       //only send if there's enough time till the end of the working day
       if (secondsTillEndOfDay > secondsNeededToSend) {
+        console.log(`There are ${secondsTillEndOfDay} sec left and I need ${secondsNeededToSend}`);
         const sendingResults = await sendSms(records);
         const resultsToWrite = sendingResults.map((result) => {
           return {
@@ -394,8 +360,9 @@ app.post('/checkandsend', async (req, res) => {
           };
         });
         //write the resuls file
-        const path = filename.split('/')[2].replace('.csv', '-1-output.csv');
-        await writeResults(resultsToWrite, path, utils.processedFileHeader);
+        const uploadPath = filename.split('/')[2].replace('.csv', '-1-output.csv');
+        await writeResults(resultsToWrite, uploadPath, utils.resultsHeader);
+        await assets.uploadFiles([uploadPath], `output/`).execute();
         //move the subfile that has been processed to the processed folder
         const processedPath = filename.split('/')[2].replace('.csv', '-1-processed.csv');
         await moveFile(assets, processedPath, 'processed/', sendingRecords, filename);

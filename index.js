@@ -8,6 +8,9 @@ const flash = require('express-flash');
 const session = require('express-session');
 const methodOverride = require('method-override');
 const passport = require('passport');
+const apikey = process.env.apikey;
+const apiSecret = process.env.apiSecret;
+const api_url = 'https://rest.nexmo.com/sms/json';
 
 const csvService = require('./services/csv');
 const { neru, Assets, Scheduler } = require('neru-alpha');
@@ -142,14 +145,26 @@ app.get('/api/templates', async (req, res) => {
 app.get('/api/templates/:id', async (req, res) => {
   const { id } = req.params;
   if (!id) {
-    return res
-      .status(404)
-      .json({ success: false, error: 'please provide a valid id' });
+    return res.status(404).json({ success: false, error: 'please provide a valid id' });
   }
   const globalState = neru.getGlobalState();
   const template = await globalState.hget(TEMPLATES_TABLENAME, id);
   const parsedTemplate = await JSON.parse(template);
   res.json(parsedTemplate);
+});
+
+app.get('/time', async (req, res) => {
+  const secondsTillEndOfDay = utils.secondsTillEndOfDay();
+
+  console.log('tps: ' + tps);
+
+  const secondsNeededToSend = parseInt(5000000 / tps);
+  console.log(`It would take me ${secondsNeededToSend} to send all files`);
+
+  const diff = secondsNeededToSend - secondsTillEndOfDay;
+  console.log(`${secondsTillEndOfDay} is the number of seconds I can be sending send and i will send ${secondsTillEndOfDay * tps}`);
+
+  res.sendStatus(200);
 });
 
 // Create a new template
@@ -179,8 +194,7 @@ app.post('/api/templates', async (req, res) => {
   } else {
     res.status(500).json({
       success: false,
-      error:
-        'please provide at least a valid text and senderIdField and also an id in case of updating existing templates.',
+      error: 'please provide at least a valid text and senderIdField and also an id in case of updating existing templates.',
     });
   }
 });
@@ -189,9 +203,7 @@ app.post('/api/templates', async (req, res) => {
 app.delete('/api/templates/:id', async (req, res) => {
   const { id } = req.params;
   if (!id) {
-    return res
-      .status(404)
-      .json({ success: false, error: 'please provide a valid id' });
+    return res.status(404).json({ success: false, error: 'please provide a valid id' });
   }
   const globalState = neru.getGlobalState();
   const deleted = await globalState.hdel(TEMPLATES_TABLENAME, id);
@@ -203,9 +215,7 @@ app.get('/dfiles', async (req, res) => {
     const session = neru.createSession();
     const assets = new Assets(session);
     // const asset = await assets.getRemoteFile('send/test.csv').execute();
-    const assetlist = await assets
-      .uploadFiles(['smsresults.csv'], 'send/')
-      .execute();
+    const assetlist = await assets.uploadFiles(['smsresults.csv'], 'send/').execute();
     console.log(assetlist);
 
     res.send('okay');
@@ -320,14 +330,10 @@ app.post('/checkandsend', async (req, res) => {
       });
     }
     assetlist.res.forEach((file) => {
-      if (
-        file &&
-        file.name &&
-        file.name.endsWith('.csv') &&
-        (!lastCheck || new Date(file.lastModified) > new Date(lastCheck))
-      ) {
+      if (file && file.name && file.name.endsWith('.csv') && (!lastCheck || new Date(file.lastModified) > new Date(lastCheck))) {
         toBeProcessed.push('/' + file.name);
       } else {
+        ///TO DO: MAKE SURE THAT IF THE FILE IS NOT PROCESSED BECAUSE WE'RE AT THE END OF THE DAY, IT IS STILL PICKED UP
         console.log('I will not send since the file is already processed');
         console.log(new Date(file.lastModified), new Date(lastCheck));
       }
@@ -356,32 +362,26 @@ app.post('/checkandsend', async (req, res) => {
         const resultsToWrite = sendingResults.map((result) => {
           return {
             to: result.to ? result.to : undefined,
-            'message-id': result['message-id']
-              ? result['message-id']
-              : result['error-text'],
+            'message-id': result['message-id'] ? result['message-id'] : result['error-text'],
             status: result['status'] === '0' ? 'sent' : 'not sent',
           };
         });
         const path = filename.split('/')[2].replace('.csv', '-output.csv');
-        await writeResults(resultsToWrite, path);
+        await writeResults(resultsToWrite, path, utils.resultsHeader);
         const result = await assets.uploadFiles([path], `output/`).execute();
-        const processedPath = filename
-          .split('/')[2]
-          .replace('.csv', '-processed.csv');
-        const fileMoved = await moveFile(
-          assets,
-          processedPath,
-          'processed/',
-          records,
-          filename
-        );
-      } else {
-        console.log(
-          'there is no time to send all the records. Splitting file... '
-        );
-        const sendingTime = secondsNeededToSend - secondsTillEndOfDay;
+        //assets, pathFrom, pathTo, records, filename
+        const processedPath = filename.split('/')[2].replace('.csv', '-processed.csv');
+        const fileMoved = await moveFile(assets, processedPath, 'processed/', records, filename);
+      } else if (secondsTillEndOfDay < 0) {
+        console.log('cannot send, end of day');
+      } else if (secondsTillEndOfDay > 0 && secondsNeededToSend > secondsTillEndOfDay) {
+        console.log('there is no time to send all the records. Splitting file... ');
+
+        console.log('I have ' + secondsTillEndOfDay + ' to send');
         //10 % security
-        const numberOfRecordsToSend = parseInt(tps * sendingTime * 0.9);
+        const numberOfRecordsToSend = parseInt(tps * secondsTillEndOfDay * 0.9);
+        console.log('I can send ' + numberOfRecordsToSend);
+
         //slice does not include the element
         //send the messages until the end of the allowed period
         const sendingRecords = records.slice(0, numberOfRecordsToSend);
@@ -389,33 +389,21 @@ app.post('/checkandsend', async (req, res) => {
         const resultsToWrite = sendingResults.map((result) => {
           return {
             to: result.to ? result.to : undefined,
-            'message-id': result['message-id']
-              ? result['message-id']
-              : result['error-text'],
+            'message-id': result['message-id'] ? result['message-id'] : result['error-text'],
             status: result['status'] === '0' ? 'sent' : 'not sent',
           };
         });
         //write the resuls file
         const path = filename.split('/')[2].replace('.csv', '-1-output.csv');
-        await writeResults(resultsToWrite, path);
+        await writeResults(resultsToWrite, path, utils.processedFileHeader);
         //move the subfile that has been processed to the processed folder
-        const processedPath = filename
-          .split('/')[2]
-          .replace('.csv', '-1-processed.csv');
-        await moveFile(
-          assets,
-          processedPath,
-          'processed/',
-          sendingRecords,
-          filename
-        );
+        const processedPath = filename.split('/')[2].replace('.csv', '-1-processed.csv');
+        await moveFile(assets, processedPath, 'processed/', sendingRecords, filename);
         //upload the pending records to be processed next morning
         const newFile = records.slice(numberOfRecordsToSend, records.length);
         const pathToFile = filename.split('/')[2].replace('.csv', '-1.csv');
-        await writeResults(newFile, pathToFile);
-        const result = await assets
-          .uploadFiles([pathToFile], `send/`)
-          .execute();
+        await writeResults(newFile, pathToFile, utils.processedFileHeader);
+        const result = await assets.uploadFiles([pathToFile], `send/`).execute();
       }
       // save info that file was processed already
       savedAsProcessedFile = await globalState.rpush(PROCESSEDFILES, FILENAME);
@@ -428,54 +416,11 @@ app.post('/checkandsend', async (req, res) => {
   }
 });
 
-app.get('/test', async (req, res) => {
-  const results = [];
-  fs.createReadStream('testlarge.csv')
-    .pipe(csv({ separator: ';' }))
-    .on('data', (data) => {
-      results.push(data);
-    })
-    .on('end', async () => {
-      let smsSendingResults = [];
-      const secondsTillEndOfDay = utils.secondsTillEndOfDay(new Date());
-      // console.log(results);
-
-      if (secondsTillEndOfDay > parseInt((results.length - 1) / 30)) {
-        // results.forEach(async (record) => {
-        for (let i = 0; i < results.length; i++) {
-          const sendingResults = await smsService.sendNothing(results[i]);
-          const { messages } = sendingResults;
-          // console.log(messages);
-
-          smsSendingResults.push({
-            to: messages[0].to,
-            'message-id': messages[0]?.['message-id']
-              ? messages[0]['message-id']
-              : messages[0]?.['error-text'],
-            status: messages[0]['status'] === '0' ? 'sent' : 'not sent',
-          });
-        }
-        // });
-        // modifyRecords(results);
-        // const sendingResults = await sendSms(results);
-        await writeResults(smsSendingResults, `testoutput${Math.random()}.csv`);
-
-        // res.json(sendingResults);
-      }
-
-      // res.sendStatus(200);
-    });
-  res.sendStatus(200);
-});
-
-const writeResults = async (results, path) => {
+const writeResults = async (results, path, header) => {
   const csvWriter = createCsvWriter({
+    fieldDelimiter: ';',
     path: path,
-    header: [
-      { id: 'to', title: 'to' },
-      { id: 'message-id', title: 'message-id' },
-      { id: 'status', title: 'status' },
-    ],
+    header: header,
   });
   // if (results.length) {
   csvWriter
@@ -483,9 +428,7 @@ const writeResults = async (results, path) => {
     .then(() => {
       console.log('...Done');
     })
-    .catch((e) =>
-      console.log(`Something wrong while writting the output csv ${e}`)
-    );
+    .catch((e) => console.log(`Something wrong while writting the output csv ${e}`));
 };
 
 const sendSms = async (records) => {
@@ -499,25 +442,17 @@ const sendSms = async (records) => {
   try {
     const promises = records.map(async (record) => {
       try {
-        const template = parsedTemplates.find(
-          (template) => template.id === record[CSV_TEMPLATE_ID_COLUMN_NAME]
-        );
+        const template = parsedTemplates.find((template) => template.id === record[CSV_TEMPLATE_ID_COLUMN_NAME]);
         let text = template?.text;
-        const senderNumber = `${record[
-          `${template?.senderIdField}`
-        ]?.replaceAll('+', '')}`;
+        const senderNumber = `${record[`${template?.senderIdField}`]?.replaceAll('+', '')}`;
 
-        const to = `${record[CSV_PHONE_NUMBER_COLUMN_NAME]?.replaceAll(
-          '+',
-          ''
-        )}`;
+        const to = `${record[CSV_PHONE_NUMBER_COLUMN_NAME]?.replaceAll('+', '')}`;
         const client_ref = record['VERPFLICHTUNGSNUMMER'];
 
         const regexp = /\{\{\s?([\w\d]+)\s?\}\}/g;
         if (text) {
           // now, find all placeholders in the template text by using the regex above
           const matchArrays = [...text.matchAll(regexp)];
-
           // for each placeholder, replace it with the value of the csv column that it references
           matchArrays.forEach((array) => {
             text = text.replaceAll(array[0], record[`${array[1]}`]);
@@ -525,16 +460,7 @@ const sendSms = async (records) => {
         }
 
         // Add to queue
-        const result = await smsService.sendSms(
-          senderNumber,
-          to,
-          text,
-          process.env.apikey,
-          process.env.apiSecret,
-          'https://rest.nexmo.com/sms/json',
-          client_ref,
-          rateLimitAxios
-        );
+        const result = await smsService.sendSms(senderNumber, to, text, apikey, apiSecret, api_url, client_ref, rateLimitAxios);
         return Promise.resolve(Object.assign({}, result.messages[0]));
       } catch (error) {
         return Promise.reject(error);
@@ -551,7 +477,7 @@ const sendSms = async (records) => {
 const moveFile = (assets, pathFrom, pathTo, records, filename) => {
   return new Promise(async (res, rej) => {
     try {
-      await writeResults(records, pathFrom);
+      await writeResults(records, pathFrom, utils.processedFileHeader);
       console.log('uploading file to processed folder');
 
       await assets.uploadFiles([pathFrom], pathTo).execute();

@@ -142,33 +142,6 @@ app.get('/', (req, res) => {
   res.redirect('/login');
 });
 
-app.get('/state', async (req, res) => {
-  const globalState = neru.getGlobalState();
-  const emailBueno = 'javiermolsanz@gmail.com';
-  const created = await globalState.hset('users', {
-    [emailBueno]: JSON.stringify({
-      id: 1,
-      emailBueno: 'javiermolsanz@gmail.com',
-      password: 'sdd',
-    }),
-  });
-  await globalState.hset('users', {
-    ['wd']: JSON.stringify({
-      id: 1,
-      emailBueno: 'javiesddrmolsanz@gmail.com',
-      password: 'sdsssd',
-    }),
-  });
-  // await globalState.hdel('users', 'wd');
-  // const savedNewCheck = await globalState.set('filesProcessing', 1);
-  // const lastCheck = await globalState.get('filesProcessing');
-
-  const customer = await globalState.hgetall('users');
-
-  if (customer) res.send(customer);
-  else res.send('no customer found');
-});
-
 // TEMPLATE API START
 // Get a list of all templates
 app.get('/api/templates', async (req, res) => {

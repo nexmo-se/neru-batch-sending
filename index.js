@@ -50,8 +50,6 @@ initializePassport(
   async (email) => {
     const globalState = neru.getGlobalState();
     const customer = await globalState.hget('users', email);
-    console.log('customer at index.js' + customer);
-
     return JSON.parse(customer);
     if (!customer) return null;
     // users.find((user) => user.email === email);
@@ -63,14 +61,15 @@ initializePassport(
   }
 );
 
-const fs = require('fs');
-
 app.use(bodyParser.urlencoded({ extended: false }));
 app.use(bodyParser.json());
-// set view engine to ejs
 app.set('view engine', 'ejs');
-
 app.get('/_/health', async (req, res) => {
+  res.sendStatus(200);
+});
+
+app.post('/keepalive', (req, res) => {
+  console.log('keep alive ping');
   res.sendStatus(200);
 });
 
@@ -89,6 +88,8 @@ const CSV_CLIENT_REF_COLUMN_NAME = 'VERPFLICHTUNGSNUMMER';
 // for EOS, we could use '0 9-18 * * 1-5' to run: At minute 0 past every hour from 9 through 18 on every day-of-week from Monday through Friday.
 // this makes sure that no one gets sendouts at weekends or in the middle of the night adn check for new files hourly within the given times and days
 const CRONJOB_DEFINITION = '* * * * *';
+
+// const CRONJOB_KEEPALIVE = '*/30 * * * * *';
 // cancel all monitoring schedulers when server crashes or not
 const ON_CRASH_CANCEL_MONITOR = false;
 
@@ -107,13 +108,12 @@ app.get('/templates', checkAuthenticated, async (req, res) => {
 
 app.get('/dfiles', async (req, res) => {
   try {
-    const session = neru.createSession();
-    const assets = new Assets(session);
-    // const asset = await assets.getRemoteFile('send/test.csv').execute();
-    const assetlist = assets.list('/send', false, 10).execute();
-    console.log(assetlist);
+    const globalState = neru.getGlobalState();
+    await globalState.set('processingState', true);
+    await globalState.set('processingState', false);
+    const processing = await globalState.get('processingState');
 
-    res.send('okay');
+    res.send(processing);
   } catch (e) {
     console.log(e);
   }
@@ -138,7 +138,7 @@ app.post(
     failureFlash: true,
   })
 );
-app.get('/', (req, res) => {
+app.get('/', checkNotAuthenticated, (req, res) => {
   res.redirect('/login');
 });
 
@@ -218,12 +218,7 @@ app.post('/scheduler', async (req, res) => {
   const scheduler = new Scheduler(session);
 
   if (command == 'start') {
-    // create scheduler with fix name that checks for new files and sends them
     let startAtDate = new Date(); // default is now
-
-    // TODO: debug stuff... change later or simply do not supply a maxInvocations parameter
-    // the following block limits the time and invocations for how often the scheduler can run,
-    // this is in in case the demo fail and we don't want dead schedulers ghosting around calling apis every minute forever
     let endAtDate = new Date();
     endAtDate.setDate(endAtDate.getDate() + 1); // runs for max 1 day
     let until = {};
@@ -236,7 +231,6 @@ app.post('/scheduler', async (req, res) => {
         },
       };
     }
-
     const schedulerCreated = await scheduler
       .startAt({
         id: 'checkandsender',
@@ -256,33 +250,8 @@ app.post('/scheduler', async (req, res) => {
   }
 });
 
-// app.get('/state', async (req, res) => {
-//   const globalState = neru.getGlobalState();
-//   const emailBueno = 'javiermolsanz@gmail.com';
-//   const created = await globalState.hset('users', {
-//     [emailBueno]: JSON.stringify({
-//       id: 1,
-//       emailBueno: 'javiermolsanz@gmail.com',
-//       password: 'sdd',
-//     }),
-//   });
-//   await globalState.hset('users', {
-//     ['wd']: JSON.stringify({
-//       id: 1,
-//       emailBueno: 'javiesddrmolsanz@gmail.com',
-//       password: 'sdsssd',
-//     }),
-//   });
-
-//   const customer = await globalState.hgetall('users');
-
-//   if (customer) res.send(customer);
-//   else res.send('no customer found');
-// });
-
 app.post('/checkandsend', async (req, res) => {
   console.log('Checking for files and sending if new CSV files exist...');
-  const FILENAME = req.body.prefix || '/test.csv';
   const FILETYPES = 'send/';
   const PROCESSEDFILES = 'processedfiles';
   try {
@@ -292,15 +261,13 @@ app.post('/checkandsend', async (req, res) => {
     const session = neru.createSession();
     // init assets access
     const assets = new Assets(session);
-
     const lastCheck = await globalState.get('lastCsvCheck');
+    const processingFiles = await globalState.get('processingState');
 
     // get file list from assets api
     const assetlist = await assets.list(FILETYPES, false, 10).execute();
     console.log(assetlist);
 
-    const newCheck = new Date().toISOString();
-    const savedNewCheck = await globalState.set('lastCsvCheck', newCheck);
     const secondsTillEndOfDay = utils.secondsTillEndOfDay();
 
     let toBeProcessed = [];
@@ -313,14 +280,18 @@ app.post('/checkandsend', async (req, res) => {
       });
     }
     assetlist.res.forEach((file) => {
-      if (file && file.name && file.name.endsWith('.csv') && (!lastCheck || new Date(file.lastModified) > new Date(lastCheck))) {
+      if (
+        file &&
+        file.name &&
+        file.name.endsWith('.csv') &&
+        (!lastCheck || new Date(file.lastModified) > new Date(lastCheck)) &&
+        !processingFiles
+      ) {
         toBeProcessed.push('/' + file.name);
       } else {
-        ///TO DO: MAKE SURE THAT IF THE FILE IS NOT PROCESSED BECAUSE WE'RE AT THE END OF THE DAY, IT IS STILL PICKED UP
         console.log('I will not send since the file is already processed');
         console.log(new Date(file.lastModified), new Date(lastCheck));
       }
-      //toBeProcessed.push("/" + file.name);
     });
 
     let asset;
@@ -340,6 +311,10 @@ app.post('/checkandsend', async (req, res) => {
       const secondsNeededToSend = parseInt((records.length - 1) / tps);
       //only send if there's enough time till the end of the working day
       if (secondsTillEndOfDay > secondsNeededToSend) {
+        await globalState.set('processingState', true);
+        await createKeepAlive();
+        const newCheck = new Date().toISOString();
+        const savedNewCheck = await globalState.set('lastCsvCheck', newCheck);
         console.log(`There are ${secondsTillEndOfDay} sec left and I need ${secondsNeededToSend}`);
         const sendingResults = await sendSms(records);
         const resultsToWrite = sendingResults.map((result) => {
@@ -355,17 +330,18 @@ app.post('/checkandsend', async (req, res) => {
         //assets, pathFrom, pathTo, records, filename
         const processedPath = filename.split('/')[2].replace('.csv', '-processed.csv');
         const fileMoved = await moveFile(assets, processedPath, 'processed/', records, filename);
+        await globalState.set('processingState', false);
+        await deleteKeepAlive();
       } else if (secondsTillEndOfDay < 0) {
         console.log('cannot send, end of day');
       } else if (secondsTillEndOfDay > 0 && secondsNeededToSend > secondsTillEndOfDay) {
         console.log('there is no time to send all the records. Splitting file... ');
-
+        await globalState.set('processingState', true);
         console.log('I have ' + secondsTillEndOfDay + ' to send');
         //10 % security
         const numberOfRecordsToSend = parseInt(tps * secondsTillEndOfDay * 0.9);
         console.log('I can send ' + numberOfRecordsToSend);
 
-        //slice does not include the element
         //send the messages until the end of the allowed period
         const sendingRecords = records.slice(0, numberOfRecordsToSend);
         const sendingResults = await sendSms(sendingRecords);
@@ -385,12 +361,12 @@ app.post('/checkandsend', async (req, res) => {
         await moveFile(assets, processedPath, 'processed/', sendingRecords, filename);
         //upload the pending records to be processed next morning
         const newFile = records.slice(numberOfRecordsToSend, records.length);
-        const pathToFile = filename.split('/')[2].replace('.csv', '-1.csv');
+        const pathToFile = filename.split('/')[2].replace('.csv', '-2.csv');
         await writeResults(newFile, pathToFile, utils.processedFileHeader);
         const result = await assets.uploadFiles([pathToFile], `send/`).execute();
+        await globalState.set('processingState', false);
       }
       // save info that file was processed already
-      savedAsProcessedFile = await globalState.rpush(PROCESSEDFILES, FILENAME);
     });
 
     res.sendStatus(200);
@@ -458,6 +434,44 @@ const sendSms = async (records) => {
   }
 };
 
+const createKeepAlive = async () => {
+  try {
+    const session = neru.createSession();
+    const scheduler = new Scheduler(session);
+    let startAtDate = new Date();
+    let endAtDate = new Date();
+    endAtDate.setDate(endAtDate.getHours() + 1); // runs for max 1 hour
+    await scheduler
+      .startAt({
+        id: 'keepalive',
+        startAt: startAtDate.toISOString(),
+        callback: '/keepalive',
+        interval: {
+          cron: CRONJOB_DEFINITION,
+          // until: {
+          //   date: endAtDate.toISOString(), // just ot be sure also limit days for demo purpose
+          //   // max 1 hour with one invocation per minute
+          // },
+        },
+      })
+      .execute();
+    return;
+  } catch (e) {
+    console.log(`${e}. Something wrong creating the keep alive scheduler`);
+  }
+};
+
+const deleteKeepAlive = async () => {
+  try {
+    const session = neru.createSession();
+    const scheduler = new Scheduler(session);
+    await scheduler.cancel('keepalive').execute();
+    return;
+  } catch (e) {
+    console.log(`${e}. Something wrong deleting the keep alive scheduler`);
+  }
+};
+
 const moveFile = (assets, pathFrom, pathTo, records, filename) => {
   return new Promise(async (res, rej) => {
     try {
@@ -484,7 +498,7 @@ function checkAuthenticated(req, res, next) {
 }
 function checkNotAuthenticated(req, res, next) {
   if (req.isAuthenticated()) {
-    return res.redirect('/templates');
+    return res.redirect('/templates/new');
   }
   next();
 }

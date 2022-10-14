@@ -39,11 +39,6 @@ app.use(passport.initialize());
 app.use(passport.session());
 app.use(methodOverride('_method'));
 
-// async function getUserByEmail(email) {
-//   const customer = await globalState.hget('users', email);
-//   return customer;
-// }
-
 initializePassport(
   passport,
   async (email) => {
@@ -51,7 +46,6 @@ initializePassport(
     const customer = await globalState.hget('users', email);
     return JSON.parse(customer);
     if (!customer) return null;
-    // users.find((user) => user.email === email);
   },
   async (email) => {
     const globalState = neru.getGlobalState();

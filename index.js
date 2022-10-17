@@ -18,7 +18,10 @@ const utils = require('./utils');
 const initializePassport = require('./passport-strategy');
 
 const globalState = neru.getGlobalState();
-const CRONJOB_DEFINITION = '* * * * *';
+const CRONJOB_DEFINITION_SCHEDULER = '0 9-20 * * 1-5';
+const TEMPLATES_TABLENAME = 'TEMPLATES';
+
+const EOS_CRONJOB = '15,45 6-19 * * 1-6';
 
 // cancel all monitoring schedulers when server crashes or not
 const ON_CRASH_CANCEL_MONITOR = false;
@@ -199,8 +202,8 @@ app.post('/scheduler', async (req, res) => {
         startAt: startAtDate.toISOString(),
         callback: '/checkandsend',
         interval: {
-          cron: CRONJOB_DEFINITION,
-          ...until,
+          cron: CRONJOB_DEFINITION_SCHEDULER,
+          // ...until,
         },
       })
       .execute();

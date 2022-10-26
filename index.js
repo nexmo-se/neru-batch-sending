@@ -21,7 +21,7 @@ const globalState = neru.getGlobalState();
 const CRONJOB_DEFINITION_SCHEDULER = '0 9-20 * * 1-5';
 const TEMPLATES_TABLENAME = 'TEMPLATES';
 
-const EOS_CRONJOB = '15,45 6-19 * * 1-6';
+const EOS_CRONJOB = '15,45 6-20 * * 1-6';
 
 // cancel all monitoring schedulers when server crashes or not
 const ON_CRASH_CANCEL_MONITOR = false;
@@ -202,7 +202,7 @@ app.post('/scheduler', async (req, res) => {
         startAt: startAtDate.toISOString(),
         callback: '/checkandsend',
         interval: {
-          cron: CRONJOB_DEFINITION_SCHEDULER,
+          cron: EOS_CRONJOB,
           // ...until,
         },
       })
@@ -263,6 +263,7 @@ app.post('/checkandsend', async (req, res) => {
       records = csvService.fromCsvSync(asset.toString(), {
         columns: true,
         delimiter: ';',
+        skip_empty_lines: true,
       });
       const secondsTillEndOfDay = utils.secondsTillEndOfDay();
       const secondsNeededToSend = parseInt((records.length - 1) / tps);

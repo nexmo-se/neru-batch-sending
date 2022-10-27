@@ -19,6 +19,7 @@ const processedFileHeader = [
 ];
 
 const resultsHeader = [
+  { id: 'id', title: 'id' },
   { id: 'to', title: 'to' },
   { id: 'message-id', title: 'message-id' },
   { id: 'status', title: 'status' },

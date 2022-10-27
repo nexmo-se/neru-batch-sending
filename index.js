@@ -250,7 +250,6 @@ app.post('/checkandsend', async (req, res) => {
         toBeProcessed.push('/' + file.name);
       } else {
         console.log('I will not send since the file is already processed or there are files being processed');
-        console.log(new Date(file.lastModified), new Date(lastCheck));
       }
     });
 
@@ -259,36 +258,49 @@ app.post('/checkandsend', async (req, res) => {
     toBeProcessed.forEach(async (filename) => {
       // process and send the file
       console.log('processing file');
-      const asset = await assets.getRemoteFile(filename).execute();
-      records = csvService.fromCsvSync(asset.toString(), {
-        columns: true,
-        delimiter: ';',
-        skip_empty_lines: true,
-      });
+      try {
+        const asset = await assets.getRemoteFile(filename).execute();
+        records = csvService.fromCsvSync(asset.toString(), {
+          columns: true,
+          delimiter: ';',
+          skip_empty_lines: true,
+          skip_lines_with_error: true,
+        });
+      } catch (e) {
+        console.log('there was an error parsing the csv file' + e);
+        await globalState.set('processingState', false);
+        await keepAlive.deleteKeepAlive();
+      }
       const secondsTillEndOfDay = utils.secondsTillEndOfDay();
       const secondsNeededToSend = parseInt((records.length - 1) / tps);
       //only send if there's enough time till the end of the working day
       if (secondsTillEndOfDay > secondsNeededToSend) {
-        await globalState.set('processingState', true);
-        await keepAlive.createKeepAlive();
-        const newCheck = new Date().toISOString();
-        const savedNewCheck = await globalState.set('lastCsvCheck', newCheck);
-        console.log(`There are ${secondsTillEndOfDay} sec left and I need ${secondsNeededToSend}`);
-        const sendingResults = await smsService.sendAllMessages(records);
-        const resultsToWrite = sendingResults.map((result) => {
-          return {
-            to: result.to ? result.to : undefined,
-            'message-id': result['message-id'] ? result['message-id'] : result['error-text'],
-            status: result['status'] === '0' ? 'sent' : 'not sent',
-          };
-        });
-        const path = filename.split('/')[2].replace('.csv', '-output.csv');
-        await utils.writeResults(resultsToWrite, path, constants.resultsHeader);
-        const result = await assets.uploadFiles([path], `output/`).execute();
-        const processedPath = filename.split('/')[2].replace('.csv', '-processed.csv');
-        const fileMoved = await utils.moveFile(assets, processedPath, 'processed/', records, filename);
-        await globalState.set('processingState', false);
-        await keepAlive.deleteKeepAlive();
+        try {
+          await globalState.set('processingState', true);
+          await keepAlive.createKeepAlive();
+          const newCheck = new Date().toISOString();
+          const savedNewCheck = await globalState.set('lastCsvCheck', newCheck);
+          console.log(`There are ${secondsTillEndOfDay} sec left and I need ${secondsNeededToSend}`);
+          const sendingResults = await smsService.sendAllMessages(records, filename);
+          const resultsToWrite = sendingResults.map((result) => {
+            return {
+              id: result.client_ref,
+              to: result.to ? result.to : undefined,
+              'message-id': result['message-id'] ? result['message-id'] : result['error-text'],
+              status: result['status'] === '0' ? 'sent' : 'not sent',
+            };
+          });
+          const path = filename.split('/')[2].replace('.csv', '-output.csv');
+          await utils.writeResults(resultsToWrite, path, constants.resultsHeader);
+          const result = await assets.uploadFiles([path], `output/`).execute();
+          const processedPath = filename.split('/')[2].replace('.csv', '-processed.csv');
+          const fileMoved = await utils.moveFile(assets, processedPath, 'processed/', records, filename);
+          await globalState.set('processingState', false);
+          await keepAlive.deleteKeepAlive();
+        } catch (e) {
+          await globalState.set('processingState', false);
+          await keepAlive.deleteKeepAlive();
+        }
       } else if (secondsTillEndOfDay < 0) {
         console.log('cannot send, end of day');
       } else if (secondsTillEndOfDay > 0 && secondsNeededToSend > secondsTillEndOfDay) {
@@ -302,7 +314,7 @@ app.post('/checkandsend', async (req, res) => {
         //send the messages until the end of the allowed period
         await keepAlive.createKeepAlive();
         const sendingRecords = records.slice(0, numberOfRecordsToSend);
-        const sendingResults = await smsService.sendAllMessages(sendingRecords);
+        const sendingResults = await smsService.sendAllMessages(sendingRecords, filename);
         const resultsToWrite = sendingResults.map((result) => {
           return {
             to: result.to ? result.to : undefined,
@@ -325,6 +337,7 @@ app.post('/checkandsend', async (req, res) => {
         await globalState.set('processingState', false);
         await keepAlive.deleteKeepAlive();
       }
+
       // save info that file was processed already
     });
 

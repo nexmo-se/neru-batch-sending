@@ -1,0 +1,5 @@
+id;to;message-id;status
+15210001;34628124767;f35ab7b9-67c9-4f50-9240-4222eac30efd;sent
+15210001;;to address is not valid;not sent
+15210001;;Missing to param;not sent
+15210001;;Missing from param;not sent

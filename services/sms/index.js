@@ -21,7 +21,8 @@ const apiSecret = process.env.apiSecret;
 const api_url = 'https://rest.nexmo.com/sms/json';
 const globalState = neru.getGlobalState();
 
-const sendAllMessages = async (records) => {
+const sendAllMessages = async (records, filename) => {
+  const csvName = filename.split('send/')[1];
   const templates = await globalState.hgetall(TEMPLATES_TABLENAME);
   const parsedTemplates = Object.keys(templates).map((key) => {
     const data = JSON.parse(templates[key]);
@@ -31,12 +32,14 @@ const sendAllMessages = async (records) => {
   try {
     const promises = records.map(async (record) => {
       try {
+        console.log(record);
+
         const template = parsedTemplates.find((template) => template.id === record[CSV_TEMPLATE_ID_COLUMN_NAME]);
         let text = template?.text;
         const senderNumber = `${record[`${template?.senderIdField}`]?.replaceAll('+', '')}`;
 
         const to = `${record[CSV_PHONE_NUMBER_COLUMN_NAME]?.replaceAll('+', '')}`;
-        const client_ref = record['VERPFLICHTUNGSNUMMER'];
+        const client_ref = record[CSV_ID_COLUMN_NAME];
 
         const regexp = /\{\{\s?([\w\d]+)\s?\}\}/g;
         if (text) {
@@ -47,10 +50,10 @@ const sendAllMessages = async (records) => {
             text = text.replaceAll(array[0], record[`${array[1]}`]);
           });
         }
-
+        const client_ref_obj = { client_ref: client_ref };
         // Add to queue
-        const result = await sendSms(senderNumber, to, text, apikey, apiSecret, api_url, client_ref, rateLimitAxios);
-        return Promise.resolve(Object.assign({}, result.messages[0]));
+        const result = await sendSms(senderNumber, to, text, apikey, apiSecret, api_url, client_ref, csvName, rateLimitAxios);
+        return Promise.resolve(Object.assign({}, result.messages[0], client_ref_obj));
       } catch (error) {
         return Promise.reject(error);
       }
@@ -63,7 +66,7 @@ const sendAllMessages = async (records) => {
   }
 };
 
-const sendSms = (from, to, text, apiKey, apiSecret, apiUrl, campaignName, axios) => {
+const sendSms = (from, to, text, apiKey, apiSecret, apiUrl, campaignName, csvName, axios) => {
   // Determine proper type to send as
   const type = isUnicode(text) ? 'unicode' : 'text';
 
@@ -71,11 +74,12 @@ const sendSms = (from, to, text, apiKey, apiSecret, apiUrl, campaignName, axios)
   const body = {
     api_key: apiKey,
     api_secret: apiSecret,
-    from,
-    to,
-    text,
+    from: from,
+    to: to,
+    text: text,
     type,
     'client-ref': campaignName,
+    'account-ref': csvName,
   };
 
   return axios

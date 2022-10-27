@@ -311,46 +311,51 @@ app.post('/checkandsend', async (req, res) => {
       } else if (secondsTillEndOfDay < 0) {
         console.log('cannot send, end of day');
       } else if (secondsTillEndOfDay > 0 && secondsNeededToSend > secondsTillEndOfDay) {
-        console.log('there is no time to send all the records. Splitting file... ');
-        await globalState.set('processingState', true);
-        console.log('I have ' + secondsTillEndOfDay + ' to send');
-        //10 % security
-        const numberOfRecordsToSend = parseInt(tps * secondsTillEndOfDay * 0.9);
-        console.log('I can send ' + numberOfRecordsToSend);
+        try {
+          console.log('there is no time to send all the records. Splitting file... ');
+          await globalState.set('processingState', true);
+          console.log('I have ' + secondsTillEndOfDay + ' to send');
+          //10 % security
+          const numberOfRecordsToSend = parseInt(tps * secondsTillEndOfDay * 0.9);
+          console.log('I can send ' + numberOfRecordsToSend);
 
-        //send the messages until the end of the allowed period
-        await keepAlive.createKeepAlive();
-        const sendingRecords = records.slice(0, numberOfRecordsToSend);
-        const startProcessingDate = new Date().toISOString();
-        const sendingResults = await smsService.sendAllMessages(sendingRecords, filename);
-        const endProcessingDate = new Date().toISOString();
-        const failedResults = sendingResults.filter((result) => result.status !== '0');
-        const failedSummary = [
-          {
-            failed: failedResults.length,
-            successful: sendingResults.length - failedResults.length,
-            startAt: startProcessingDate,
-            endAt: endProcessingDate,
-          },
-        ];
-        //write the resuls file
-        const Failedpath = filename.split('/')[2].replace('.csv', '-failed-1-output.csv');
-        await utils.writeResults(failedResults, Failedpath, constants.failedResultsHeader);
-        await assets.uploadFiles([Failedpath], `output/`).execute();
-        const path = filename.split('/')[2].replace('.csv', '-1-output.csv');
-        await utils.writeResults(failedSummary, path, constants.failedHeader);
-        await assets.uploadFiles([path], `output/`).execute();
+          //send the messages until the end of the allowed period
+          await keepAlive.createKeepAlive();
+          const sendingRecords = records.slice(0, numberOfRecordsToSend);
+          const startProcessingDate = new Date().toISOString();
+          const sendingResults = await smsService.sendAllMessages(sendingRecords, filename);
+          const endProcessingDate = new Date().toISOString();
+          const failedResults = sendingResults.filter((result) => result.status !== '0');
+          const failedSummary = [
+            {
+              failed: failedResults.length,
+              successful: sendingResults.length - failedResults.length,
+              startAt: startProcessingDate,
+              endAt: endProcessingDate,
+            },
+          ];
+          //write the resuls file
+          const Failedpath = filename.split('/')[2].replace('.csv', '-failed-1-output.csv');
+          await utils.writeResults(failedResults, Failedpath, constants.failedResultsHeader);
+          await assets.uploadFiles([Failedpath], `output/`).execute();
+          const path = filename.split('/')[2].replace('.csv', '-1-output.csv');
+          await utils.writeResults(failedSummary, path, constants.failedHeader);
+          await assets.uploadFiles([path], `output/`).execute();
 
-        //move the subfile that has been processed to the processed folder
-        const processedPath = filename.split('/')[2].replace('.csv', '-1-processed.csv');
-        await utils.moveFile(assets, processedPath, 'processed/', sendingRecords, filename);
-        //upload the pending records to be processed next morning
-        const newFile = records.slice(numberOfRecordsToSend, records.length);
-        const pathToFile = filename.split('/')[2].replace('.csv', '-2.csv');
-        await utils.writeResults(newFile, pathToFile, constants.processedFileHeader);
-        const result = await assets.uploadFiles([pathToFile], `send/`).execute();
-        await globalState.set('processingState', false);
-        await keepAlive.deleteKeepAlive();
+          //move the subfile that has been processed to the processed folder
+          const processedPath = filename.split('/')[2].replace('.csv', '-1-processed.csv');
+          await utils.moveFile(assets, processedPath, 'processed/', sendingRecords, filename);
+          //upload the pending records to be processed next morning
+          const newFile = records.slice(numberOfRecordsToSend, records.length);
+          const pathToFile = filename.split('/')[2].replace('.csv', '-2.csv');
+          await utils.writeResults(newFile, pathToFile, constants.processedFileHeader);
+          const result = await assets.uploadFiles([pathToFile], `send/`).execute();
+          await globalState.set('processingState', false);
+          await keepAlive.deleteKeepAlive();
+        } catch (e) {
+          await globalState.set('processingState', false);
+          await keepAlive.deleteKeepAlive();
+        }
       }
 
       // save info that file was processed already

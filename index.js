@@ -317,6 +317,7 @@ app.post('/checkandsend', async (req, res) => {
         const sendingResults = await smsService.sendAllMessages(sendingRecords, filename);
         const resultsToWrite = sendingResults.map((result) => {
           return {
+            id: result?.client_ref,
             to: result.to ? result.to : undefined,
             'message-id': result['message-id'] ? result['message-id'] : result['error-text'],
             status: result['status'] === '0' ? 'sent' : 'not sent',

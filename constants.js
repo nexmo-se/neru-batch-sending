@@ -25,7 +25,21 @@ const resultsHeader = [
   { id: 'status', title: 'status' },
 ];
 
+const failedResultsHeader = [
+  { id: 'client_ref', title: 'id' },
+  { id: 'error-text', title: 'error-text' },
+];
+
+const failedHeader = [
+  { id: 'failed', title: 'failed' },
+  { id: 'successful', title: 'successful' },
+  { id: 'startAt', title: 'startAt' },
+  { id: 'endAt', title: 'endAt' },
+];
+
 module.exports = {
   resultsHeader,
   processedFileHeader,
+  failedHeader,
+  failedResultsHeader,
 };

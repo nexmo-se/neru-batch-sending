@@ -228,7 +228,7 @@ app.post('/checkandsend', async (req, res) => {
     const processingFiles = await globalState.get('processingState');
     // get file list from assets api
     const assetlist = await assets.list(FILETYPES, false, 10).execute();
-    console.log(assetlist);
+    // console.log(assetlist);
     const secondsTillEndOfDay = utils.secondsTillEndOfDay();
     let toBeProcessed = [];
 
@@ -281,17 +281,24 @@ app.post('/checkandsend', async (req, res) => {
           const newCheck = new Date().toISOString();
           const savedNewCheck = await globalState.set('lastCsvCheck', newCheck);
           console.log(`There are ${secondsTillEndOfDay} sec left and I need ${secondsNeededToSend}`);
+          const startProcessingDate = new Date().toISOString();
           const sendingResults = await smsService.sendAllMessages(records, filename);
-          const resultsToWrite = sendingResults.map((result) => {
-            return {
-              id: result.client_ref,
-              to: result.to ? result.to : undefined,
-              'message-id': result['message-id'] ? result['message-id'] : result['error-text'],
-              status: result['status'] === '0' ? 'sent' : 'not sent',
-            };
-          });
+          const endProcessingDate = new Date().toISOString();
+          const failedResults = sendingResults.filter((result) => result.status !== '0');
+          const failedSummary = [
+            {
+              failed: failedResults.length,
+              successful: sendingResults.length - failedResults.length,
+              startAt: startProcessingDate,
+              endAt: endProcessingDate,
+            },
+          ];
+          const Failedpath = filename.split('/')[2].replace('.csv', '-failed-output.csv');
+          await utils.writeResults(failedResults, Failedpath, constants.failedResultsHeader);
+          await assets.uploadFiles([Failedpath], `output/`).execute();
           const path = filename.split('/')[2].replace('.csv', '-output.csv');
-          await utils.writeResults(resultsToWrite, path, constants.resultsHeader);
+          await utils.writeResults(failedSummary, path, constants.failedHeader);
+          // await utils.writeResults(resultsToWrite, path, constants.resultsHeader);
           const result = await assets.uploadFiles([path], `output/`).execute();
           const processedPath = filename.split('/')[2].replace('.csv', '-processed.csv');
           const fileMoved = await utils.moveFile(assets, processedPath, 'processed/', records, filename);
@@ -314,19 +321,26 @@ app.post('/checkandsend', async (req, res) => {
         //send the messages until the end of the allowed period
         await keepAlive.createKeepAlive();
         const sendingRecords = records.slice(0, numberOfRecordsToSend);
+        const startProcessingDate = new Date().toISOString();
         const sendingResults = await smsService.sendAllMessages(sendingRecords, filename);
-        const resultsToWrite = sendingResults.map((result) => {
-          return {
-            id: result?.client_ref,
-            to: result.to ? result.to : undefined,
-            'message-id': result['message-id'] ? result['message-id'] : result['error-text'],
-            status: result['status'] === '0' ? 'sent' : 'not sent',
-          };
-        });
+        const endProcessingDate = new Date().toISOString();
+        const failedResults = sendingResults.filter((result) => result.status !== '0');
+        const failedSummary = [
+          {
+            failed: failedResults.length,
+            successful: sendingResults.length - failedResults.length,
+            startAt: startProcessingDate,
+            endAt: endProcessingDate,
+          },
+        ];
         //write the resuls file
-        const uploadPath = filename.split('/')[2].replace('.csv', '-1-output.csv');
-        await utils.writeResults(resultsToWrite, uploadPath, constants.resultsHeader);
-        await assets.uploadFiles([uploadPath], `output/`).execute();
+        const Failedpath = filename.split('/')[2].replace('.csv', '-failed-1-output.csv');
+        await utils.writeResults(failedResults, Failedpath, constants.failedResultsHeader);
+        await assets.uploadFiles([Failedpath], `output/`).execute();
+        const path = filename.split('/')[2].replace('.csv', '-1-output.csv');
+        await utils.writeResults(failedSummary, path, constants.failedHeader);
+        await assets.uploadFiles([path], `output/`).execute();
+
         //move the subfile that has been processed to the processed folder
         const processedPath = filename.split('/')[2].replace('.csv', '-1-processed.csv');
         await utils.moveFile(assets, processedPath, 'processed/', sendingRecords, filename);

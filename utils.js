@@ -12,6 +12,8 @@ const secondsTillEndOfDay = () => {
 };
 
 const writeResults = async (results, path, header) => {
+  console.log('uploading file to ' + path);
+
   const csvWriter = createCsvWriter({
     fieldDelimiter: ';',
     path: path,

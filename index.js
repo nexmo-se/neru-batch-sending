@@ -21,7 +21,7 @@ const globalState = neru.getGlobalState();
 const CRONJOB_DEFINITION_SCHEDULER = '0 9-20 * * 1-5';
 const TEMPLATES_TABLENAME = 'TEMPLATES';
 
-const EOS_CRONJOB = '15,45 6-20 * * 1-6';
+const EOS_CRONJOB = '15,45 5-20 * * 1-5';
 
 // cancel all monitoring schedulers when server crashes or not
 const ON_CRASH_CANCEL_MONITOR = false;
@@ -228,7 +228,7 @@ app.post('/scheduler', async (req, res) => {
   }
 });
 
-async function processAllFiles(files, assets) {
+async function processAllFiles(files, assets, scheduler) {
   for (const filename of files) {
     // toBeProcessed.forEach(async (filename) => {
     // process and send the file
@@ -249,7 +249,9 @@ async function processAllFiles(files, assets) {
     const secondsTillEndOfDay = utils.secondsTillEndOfDay();
     const secondsNeededToSend = parseInt((records.length - 1) / tps);
     //only send if there's enough time till the end of the working day
-    if (secondsTillEndOfDay > secondsNeededToSend) {
+    if (secondsTillEndOfDay > secondsNeededToSend && utils.timeNow() > 16) {
+      // console.log(utils.now.c.hour);
+
       try {
         await globalState.set('processingState', true);
         try {
@@ -346,6 +348,8 @@ async function processAllFiles(files, assets) {
         await globalState.set('processingState', false);
         await keepAlive.deleteKeepAlive();
       }
+    } else {
+      console.log('too early to send');
     }
   }
   // save info that file was processed already
@@ -391,7 +395,7 @@ app.post('/checkandsend', async (req, res) => {
         console.log('I will not send since the file is already processed or there are files being processed');
       }
     });
-    processAllFiles(toBeProcessed, assets);
+    processAllFiles(toBeProcessed, assets, scheduler);
 
     res.sendStatus(200);
   } catch (e) {

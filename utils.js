@@ -3,8 +3,11 @@ const createCsvWriter = require('csv-writer').createObjectCsvWriter;
 const checkSenderIdValid = (senderId) => /^[a-zA-Z0-9]*$/gm.test(senderId);
 
 const now = DateTime.now().setZone('Europe/Berlin');
-const germanTime = DateTime.fromObject({ day: now.c.day, hour: 19, minute: 22, second: 0 }, { zone: 'Europe/Berlin' });
+const germanTime = DateTime.fromObject({ day: now.c.day, hour: 19, minute: 0, second: 0 }, { zone: 'Europe/Berlin' });
 const constants = require('./constants');
+const timeNow = () => {
+  return now.c.hour;
+};
 
 const secondsTillEndOfDay = () => {
   const diffSeconds = parseInt((germanTime - now) / 1000);
@@ -75,4 +78,5 @@ module.exports = {
   moveFile,
   checkAuthenticated,
   checkNotAuthenticated,
+  timeNow,
 };

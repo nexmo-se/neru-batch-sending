@@ -32,8 +32,6 @@ const sendAllMessages = async (records, filename) => {
   try {
     const promises = records.map(async (record) => {
       try {
-        console.log(record);
-
         const template = parsedTemplates.find((template) => template.id === record[CSV_TEMPLATE_ID_COLUMN_NAME]);
         let text = template?.text;
         const senderNumber = `${record[`${template?.senderIdField}`]?.replaceAll('+', '')}`;

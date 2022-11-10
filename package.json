@@ -18,7 +18,7 @@
     "cookie-session": "^2.0.0",
     "cors": "^2.8.5",
     "csv": "^6.2.0",
-    "csv-parse": "^4.16.3",
+    "csv-parse": "^4.8.0",
     "csv-parser": "^3.0.0",
     "csv-writer": "^1.6.0",
     "dotenv": "^16.0.2",

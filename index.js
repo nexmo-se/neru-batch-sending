@@ -240,6 +240,7 @@ async function processAllFiles(files, assets, scheduler) {
         delimiter: ';',
         skip_empty_lines: true,
         skip_lines_with_error: true,
+        relax_column_count_more: true,
       });
     } catch (e) {
       console.log('there was an error parsing the csv file' + e);
@@ -249,7 +250,7 @@ async function processAllFiles(files, assets, scheduler) {
     const secondsTillEndOfDay = utils.secondsTillEndOfDay();
     const secondsNeededToSend = parseInt((records.length - 1) / tps);
     //only send if there's enough time till the end of the working day
-    if (secondsTillEndOfDay > secondsNeededToSend && utils.timeNow() > 16) {
+    if (secondsTillEndOfDay > secondsNeededToSend && utils.timeNow() >= 7) {
       // console.log(utils.now.c.hour);
 
       try {

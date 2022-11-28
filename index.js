@@ -257,7 +257,9 @@ async function processAllFiles(files, assets, scheduler) {
         await globalState.set('processingState', true);
         try {
           const schedulers = await scheduler.listAll().execute();
-          if (schedulers.list.indexOf('keepalive') !== -1) await keepAlive.createKeepAlive();
+          // if (schedulers.list.indexOf('keepalive') !== -1)
+
+          await keepAlive.createKeepAlive();
         } catch (e) {
           console.log('the scheduler already exists');
         }

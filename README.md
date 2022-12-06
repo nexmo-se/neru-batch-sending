@@ -77,7 +77,7 @@ POST to `/scheduler` with {"command": "stop"}
 
 ## Important considerations.
 
-The neru instance goes to sleep after 1 minute of inactivity (inbound traffic). This app is started by an inbound request to the instance (by the scheduler) that triggers outbound requests (SMS API). The SMS sending process can take several minutes depending on the length of the csv file, therefore to prevent the instance from shutting down, there's an scheduler that keeps the instance alive by sending a ping every minute.
+The neru instance goes to sleep after 1 minute of inactivity (inbound traffic). This app is started by an inbound request to the instance (by the scheduler) that triggers outbound requests (SMS API). The SMS sending process can take several minutes depending on the length of the csv file, therefore to prevent the instance from shutting down, there's a ping to the instance every second to keep the app alive while the SMS sending process is running.
 
 ## Debug
 

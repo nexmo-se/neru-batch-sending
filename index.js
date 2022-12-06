@@ -229,6 +229,7 @@ app.post('/scheduler', async (req, res) => {
 });
 
 async function processAllFiles(files, assets, scheduler) {
+  let interval;
   for (const filename of files) {
     // toBeProcessed.forEach(async (filename) => {
     // process and send the file
@@ -251,15 +252,15 @@ async function processAllFiles(files, assets, scheduler) {
     const secondsNeededToSend = parseInt((records.length - 1) / tps);
     //only send if there's enough time till the end of the working day
     if (secondsTillEndOfDay > secondsNeededToSend && utils.timeNow() >= 7) {
-      // console.log(utils.now.c.hour);
-
       try {
         await globalState.set('processingState', true);
         try {
-          const schedulers = await scheduler.listAll().execute();
-          // if (schedulers.list.indexOf('keepalive') !== -1)
-
-          await keepAlive.createKeepAlive();
+          interval = setInterval(() => {
+            axios.get(`http://${process.env.INSTANCE_SERVICE_NAME}.neru/keepalive`);
+          }, 1000);
+          // const schedulers = await scheduler.listAll().execute();
+          // // if (schedulers.list.indexOf('keepalive') !== -1)
+          // await keepAlive.createKeepAlive();
         } catch (e) {
           console.log('the scheduler already exists');
         }
@@ -291,16 +292,19 @@ async function processAllFiles(files, assets, scheduler) {
         const processedPath = filename.split('/')[2].replace('.csv', '-processed.csv');
         const fileMoved = await utils.moveFile(assets, processedPath, 'processed/', records, filename);
         await globalState.set('processingState', false);
-        await keepAlive.deleteKeepAlive();
+        clearInterval(interval);
+        // await keepAlive.deleteKeepAlive();
       } catch (e) {
         await globalState.set('processingState', false);
-        await keepAlive.deleteKeepAlive();
+        clearInterval(interval);
+        // await keepAlive.deleteKeepAlive();
       }
     } else if (secondsTillEndOfDay < 0) {
       console.log('cannot send, end of day');
     } else if (secondsTillEndOfDay > 0 && secondsNeededToSend > secondsTillEndOfDay) {
       try {
         console.log('there is no time to send all the records. Splitting file... ');
+
         await globalState.set('processingState', true);
         console.log('I have ' + secondsTillEndOfDay + ' to send');
         //10 % security
@@ -309,8 +313,10 @@ async function processAllFiles(files, assets, scheduler) {
 
         //send the messages until the end of the allowed period
         try {
-          const schedulers = await scheduler.listAll().execute();
-          if (schedulers.list.indexOf('keepalive') !== -1) await keepAlive.createKeepAlive();
+          interval = setInterval(() => {
+            axios.get(`http://${process.env.INSTANCE_SERVICE_NAME}.neru/keepalive`);
+          }, 1000);
+          // if (schedulers.list.indexOf('keepalive') !== -1) await keepAlive.createKeepAlive();
         } catch (e) {
           console.log('the scheduler already exists');
         }
@@ -346,13 +352,12 @@ async function processAllFiles(files, assets, scheduler) {
         await utils.writeResults(newFile, pathToFile, constants.processedFileHeader);
         const result = await assets.uploadFiles([pathToFile], `send/`).execute();
         await globalState.set('processingState', false);
-        await keepAlive.deleteKeepAlive();
+        clearInterval(interval);
+        // await keepAlive.deleteKeepAlive();
       } catch (e) {
         await globalState.set('processingState', false);
-        await keepAlive.deleteKeepAlive();
+        // await keepAlive.deleteKeepAlive();
       }
-    } else {
-      console.log('too early to send');
     }
   }
   // save info that file was processed already
@@ -374,8 +379,7 @@ app.post('/checkandsend', async (req, res) => {
     const processingFiles = await globalState.get('processingState');
     // get file list from assets api
     const assetlist = await assets.list(FILETYPES, false, 10).execute();
-    // console.log(assetlist);
-    const secondsTillEndOfDay = utils.secondsTillEndOfDay();
+    console.log(assetlist);
     let toBeProcessed = [];
 
     if (!assetlist || !assetlist.res || assetlist.res.length <= 0) {
@@ -398,11 +402,12 @@ app.post('/checkandsend', async (req, res) => {
         console.log('I will not send since the file is already processed or there are files being processed');
       }
     });
+
     processAllFiles(toBeProcessed, assets, scheduler);
 
     res.sendStatus(200);
   } catch (e) {
-    console.log('check and send error: ', e.message);
+    console.log('check and send error: ', e);
     res.sendStatus(500);
   }
 });

@@ -53,6 +53,8 @@ const sendAllMessages = async (records, filename) => {
         const result = await sendSms(senderNumber, to, text, apikey, apiSecret, api_url, client_ref, csvName, rateLimitAxios);
         return Promise.resolve(Object.assign({}, result.messages[0], client_ref_obj));
       } catch (error) {
+        console.log(error);
+
         return Promise.reject(error);
       }
     });
@@ -65,6 +67,8 @@ const sendAllMessages = async (records, filename) => {
 };
 
 const sendSms = (from, to, text, apiKey, apiSecret, apiUrl, campaignName, csvName, axios) => {
+  console.log(`sending sms to ${to} from ${from} with text ${text} `);
+
   // Determine proper type to send as
   const type = isUnicode(text) ? 'unicode' : 'text';
 
@@ -83,10 +87,14 @@ const sendSms = (from, to, text, apiKey, apiSecret, apiUrl, campaignName, csvNam
   return axios
     .post(apiUrl, body)
     .then((response) => {
+      console.log(response.data);
+
       const { data } = response;
       return Promise.resolve(data);
     })
     .catch((error) => {
+      console.log(error);
+
       // Check for 429: Too Many Requests
       if (error.response != null && error.response.status === 429) {
         console.log('Too many request (429) detected, put back into queue');
